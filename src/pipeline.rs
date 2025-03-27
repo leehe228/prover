@@ -19,6 +19,7 @@ pub mod syntax;
 #[cfg(test)]
 mod tests;
 pub mod unify;
+pub mod constraints;
 
 #[derive(Serialize, Deserialize)]
 pub struct Input {
