@@ -1,12 +1,12 @@
 use std::collections::{HashMap, HashSet};
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt::{Debug, Display, Formatter, Write}; // Added Write trait import
 use std::hash::Hash;
 use std::iter::{FromIterator, Product, Sum};
 use std::ops::{Add, Mul, Not};
 use std::time::Duration;
 
 use anyhow::bail;
-use imbl::{vector, Vector, vector};
+use imbl::{vector, Vector}; // Removed duplicate "vector" import
 use indenter::indented;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -302,7 +302,7 @@ pub struct Neutral<R, E>(pub Head<R, E>, pub Vector<E>);
 
 impl<R: Display, E: Display> Display for Neutral<R, E> {
 	fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-		write!(f, "{}({})", self.0, self.1.iter().format(", "))
+		write!(f, "{}({})", self.0, self.1.iter().join(", "))
 	}
 }
 
@@ -316,7 +316,6 @@ where Env: Eval<Head<R, E>, Head<S, F>> + Eval<Vector<E>, Vector<F>> + Clone
 	}
 }
 
-/// SQL data types (adapted from sqlparser)
 /// SQL data types (adapted from sqlparser)
 #[derive(
 	Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize_enum_str, Deserialize_enum_str,
@@ -349,7 +348,7 @@ impl<T> Terms<T> {
 		Terms(vector![])
 	}
 
-	pub fn iter(&self) -> Iter<'_, T> {
+	pub fn iter(&self) -> imbl::vector::Iter<'_, T> {
 		self.0.iter()
 	}
 }
@@ -359,7 +358,7 @@ impl<T: Clone> Terms<T> {
 		Terms(vector![term])
 	}
 
-	pub fn into_iter(self) -> ConsumingIter<T> {
+	pub fn into_iter(self) -> imbl::vector::ConsumingIter<T> {
 		self.0.into_iter()
 	}
 }
@@ -372,7 +371,7 @@ impl<T: Clone + Default> Terms<T> {
 
 impl<T: Clone> IntoIterator for Terms<T> {
 	type Item = T;
-	type IntoIter = ConsumingIter<T>;
+	type IntoIter = imbl::vector::ConsumingIter<T>;
 
 	fn into_iter(self) -> Self::IntoIter {
 		self.into_iter()
@@ -381,7 +380,7 @@ impl<T: Clone> IntoIterator for Terms<T> {
 
 impl<'a, T> IntoIterator for &'a Terms<T> {
 	type Item = &'a T;
-	type IntoIter = Iter<'a, T>;
+	type IntoIter = imbl::vector::Iter<'a, T>;
 
 	fn into_iter(self) -> Self::IntoIter {
 		self.iter()
@@ -565,7 +564,8 @@ pub fn get_attribute<'c>(ctx: &'c Context, table_name: &str, attr: &str, data_ty
 	let sort = match data_type {
 		DataType::Integer => Sort::int(ctx),
 		DataType::Real => Sort::real(ctx),
-		DataType::Varchar => Sort::string(ctx),
+		// Use the String variant for VARCHAR.
+		DataType::String => Sort::string(ctx),
 		DataType::Custom(_) => Sort::uninterpreted(ctx, z3::Symbol::String("Custom".to_string())),
 	};
 	Dynamic::fresh_const(ctx, &format!("{}_{}", table_name, attr), &sort)
@@ -589,26 +589,26 @@ pub fn assert_constraints_from_file<'c>(
 			["NotNull", table, attr] => {
 				if let (Some(rel), Some(attribute)) = (
 					schema_map.get(&table.to_string()),
-					attr_map.get(&(table.to_string(), attr.to_string()))
+					attr_map.get(&(table.to_string(), attr.to_string())),
 				) {
 					solver.assert(&not_null(ctx, rel, attribute));
 				}
-			},
+			}
 			// Format: RefAttr, r1, a1, r2, a2
 			["RefAttr", r1, a1, r2, a2] => {
 				if let (Some(rel1), Some(attr1), Some(rel2), Some(attr2)) = (
 					schema_map.get(&r1.to_string()),
 					attr_map.get(&(r1.to_string(), a1.to_string())),
 					schema_map.get(&r2.to_string()),
-					attr_map.get(&(r2.to_string(), a2.to_string()))
+					attr_map.get(&(r2.to_string(), a2.to_string())),
 				) {
 					solver.assert(&ref_attr(ctx, rel1, attr1, rel2, attr2));
 				}
-			},
-			// TODO: You can add additional cases for RelEq, AttrsEq, PredEq, SubAttr, Unique, etc.
-			// _ => {
-			// 	// For unknown constraint types, log a warning or skip.
-			// }
+			}
+			// TODO: Additional cases for RelEq, AttrsEq, PredEq, SubAttr, Unique, etc. can be added here.
+			_ => {
+				// For unknown constraint types, you could log a warning or simply skip.
+			}
 		}
 	}
 }

@@ -133,8 +133,8 @@ fn main() -> std::io::Result<()> {
     let solver = Solver::new(&ctx);
 
     // Build symbol maps from schemas.
-    let mut schema_map: HashMap<String, z3::ast::Dynamic> = HashMap::new();
-    let mut attr_map: HashMap<(String, String), z3::ast::Dynamic> = HashMap::new();
+    let mut schema_map: BTreeMap<String, z3::ast::Dynamic> = BTreeMap::new();
+    let mut attr_map: BTreeMap<(String, String), z3::ast::Dynamic> = BTreeMap::new();
 
     for schema in &input.schemas {
         let table_name = schema.name.clone();
@@ -166,6 +166,7 @@ fn main() -> std::io::Result<()> {
     }
 
     if !constraints_text.is_empty() {
+        // Assert constraints into the solver.
         assert_constraints_from_file(&ctx, &solver, &constraints_text, &schema_map, &attr_map);
     }
 
