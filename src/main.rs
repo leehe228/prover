@@ -16,6 +16,9 @@ use walkdir::WalkDir;
 
 use crate::pipeline::{unify, Input, Stats};
 
+use crate::pipeline::pipeline; // assume this module contains the `unify` function and Input type
+use crate::pipeline::shared::{DataType, get_relation, get_attribute, assert_constraints_from_file};
+
 mod pipeline;
 
 fn visit<P: AsRef<Path>>(dir: P, mut cb: impl FnMut(usize, &Path)) -> io::Result<()> {
@@ -38,7 +41,7 @@ enum CosetteResult {
 	Panic(Box<dyn Any + Send>),
 }
 
-fn main() -> io::Result<()> {
+/* fn main() -> io::Result<()> {
 	Builder::from_env(Env::default().default_filter_or("off"))
 		.format(|buf, record| writeln!(buf, "{}", record.args()))
 		.target(Target::Stdout)
@@ -106,5 +109,73 @@ fn main() -> io::Result<()> {
 		println!("{}\t{:?}", name, result);
 	}
 	println!("Provable: {} / {}", al, al + bl);
+	Ok(())
+}*/
+
+fn main() -> std::io::Result<()> {
+	let args: Vec<String> = env::args().collect();
+	if args.len() < 2 {
+		eprintln!("Usage: {} <input.json> [-c <constraints.txt>]", args[0]);
+		std::process::exit(1);
+	}
+
+	// First argument is the input JSON file.
+	let input_file = &args[1];
+	let file = File::open(input_file)?;
+	let reader = BufReader::new(file);
+	let input: pipeline::Input = from_reader(reader).expect("Failed to parse input JSON");
+
+	// Set up Z3.
+	let config = Config::new();
+	let ctx = Context::new(&config);
+	let solver = Solver::new(&ctx);
+
+	// Build a mapping from table name to relation symbol and from (table, attr) to attribute symbol.
+	let mut schema_map: HashMap<String, z3::ast::Dynamic> = HashMap::new();
+	let mut attr_map: HashMap<(String, String), z3::ast::Dynamic> = HashMap::new();
+
+	for schema in &input.schemas {
+		let table_name = schema.name.clone();
+		let rel = get_relation(&ctx, &table_name);
+		schema_map.insert(table_name.clone(), rel);
+		for (attr, data_type_str) in schema.fields.iter().zip(schema.types.iter()) {
+			// Convert data_type_str to DataType (this may involve parsing; here we assume simple matching)
+			let dt = match data_type_str.as_str() {
+				"INTEGER" => DataType::INTEGER,
+				"VARCHAR" => DataType::VARCHAR,
+				_ => DataType::Custom(data_type_str.clone()),
+			};
+			let attr_sym = get_attribute(&ctx, &table_name, attr, &dt);
+			attr_map.insert((table_name.clone(), attr.clone()), attr_sym);
+		}
+	}
+
+	// If "-c" parameter is provided, read the constraints file.
+	let mut constraints_text = String::new();
+	if let Some(c_index) = args.iter().position(|arg| arg == "-c") {
+		if c_index + 1 < args.len() {
+			let constraints_file = &args[c_index + 1];
+			let mut file = File::open(constraints_file)?;
+			file.read_to_string(&mut constraints_text)?;
+		} else {
+			eprintln!("Error: -c flag provided but no file specified.");
+			std::process::exit(1);
+		}
+	}
+
+	// If constraints were provided, assert them.
+	if !constraints_text.is_empty() {
+		assert_constraints_from_file(&ctx, &solver, &constraints_text, &schema_map, &attr_map);
+	}
+
+	// Now, call QED's equivalence checking. (Assuming unify(input) returns (bool, Stats))
+	let (provable, stats) = pipeline::unify(input);
+	if provable {
+		println!("Queries are equivalent.");
+	} else {
+		println!("Queries are NOT equivalent.");
+	}
+	println!("Statistics: {:?}", stats);
+
 	Ok(())
 }
