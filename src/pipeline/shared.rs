@@ -1,28 +1,26 @@
 use std::collections::{HashMap, HashSet};
-use std::fmt::{Debug, Display, Formatter, Write};
+use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 use std::iter::{FromIterator, Product, Sum};
 use std::ops::{Add, Mul, Not};
 use std::time::Duration;
 
 use anyhow::bail;
-use imbl::vector::{ConsumingIter, Iter};
-use imbl::{vector, Vector};
+use imbl::{vector, Vector, vector};
 use indenter::indented;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use serde_enum_str::{Deserialize_enum_str, Serialize_enum_str};
-use z3::ast::{Ast, Dynamic};
-use z3::{Context, FuncDecl, Sort};
+use z3::{Context, FuncDecl, Sort, Solver};
+use z3::ast::{Ast, Dynamic, Bool};
 
-use z3::{ast::{Dynamic, Bool}, Context, Solver, Sort};
 use crate::pipeline::constraints::*;
-use std::collections::HashMap;
 
 pub trait Eval<S, T> {
-	fn eval(self, source: S) -> T;
+    fn eval(self, source: S) -> T;
 }
 
+/// A wrapper for a variable index.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct VL(pub usize);
@@ -33,6 +31,8 @@ impl Display for VL {
 	}
 }
 
+/// Schema information for a table.
+/// (Make the fields public so main.rs can iterate them.)
 #[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Schema {
 	pub types: Vec<DataType>,
@@ -45,9 +45,11 @@ pub struct Schema {
 	#[serde(default)]
 	pub nullabilities: Vec<bool>,
 	#[serde(default)]
-	pub guaranteed: Vec<super::relation::Expr>,
+	// pub guaranteed: Vec<super::relation::Expr>,
+	pub guaranteed: Vec<crate::pipeline::relation::Expr>, // Change to use the relation module
 }
 
+/// SQL expressions.
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub enum Expr<U, R, A> {
 	Var(VL, DataType),
@@ -88,6 +90,7 @@ impl<U: Display> Display for Lambda<U> {
 	}
 }
 
+/// Sigma (summation) expression.
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Sigma<U>(pub Vector<DataType>, pub U);
 
@@ -313,6 +316,7 @@ where Env: Eval<Head<R, E>, Head<S, F>> + Eval<Vector<E>, Vector<F>> + Clone
 	}
 }
 
+/// SQL data types (adapted from sqlparser)
 /// SQL data types (adapted from sqlparser)
 #[derive(
 	Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize_enum_str, Deserialize_enum_str,
@@ -547,16 +551,6 @@ impl<'c> Ctx<'c> {
 		stats.equiv_class_duration += duration;
 		stats.equiv_class_timed_out |= timed_out;
 	}
-}
-
-/// Assume that DataType is already defined uniquely in this module.
-/// Example:
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DataType {
-	Integer,
-	Real,
-	Varchar,
-	Custom(String),
 }
 
 /// Returns an uninterpreted constant representing a relation symbol for the given table.

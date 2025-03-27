@@ -51,7 +51,7 @@ pub fn sub_attr<'c>(ctx: &'c Context, a1: &Dynamic<'c>, a2: &Dynamic<'c>) -> Boo
 }
 
 /// Returns a universally quantified formula for referential attributes:
-/// ∀ t1. (r1(t1)>0 ∧ ¬IsNull(a1(t1))) ⇒ ∃ t2. (r2(t2)>0 ∧ ¬IsNull(a2(t2)) ∧ [a1(t1)=a2(t2)])
+/// ∀ t1. (r1(t1) > 0 ∧ ¬IsNull(a1(t1))) ⇒ ∃ t2. (r2(t2) > 0 ∧ ¬IsNull(a2(t2)) ∧ [a1(t1) = a2(t2)])
 pub fn ref_attr<'c>(
     ctx: &'c Context,
     r1: &Dynamic<'c>,
@@ -84,7 +84,7 @@ pub fn ref_attr<'c>(
 }
 
 /// Returns a universally quantified formula for uniqueness:
-/// (∀ t. r(t) ≤ 1) ∧ (∀ t, t'. (r(t)>0 ∧ r(t')>0 ∧ a(t)=a(t')) ⇒ t=t')
+/// (∀ t. r(t) ≤ 1) ∧ (∀ t, t'. (r(t) > 0 ∧ r(t') > 0 ∧ a(t) = a(t')) ⇒ t = t')
 pub fn unique<'c>(ctx: &'c Context, r: &Dynamic<'c>, a: &Dynamic<'c>) -> Bool<'c> {
     let tuple_sort = ctx.named_sort("Tuple").expect("Tuple sort must be defined");
     let t = Dynamic::new_const(ctx, "t", &tuple_sort);
@@ -112,7 +112,7 @@ pub fn unique<'c>(ctx: &'c Context, r: &Dynamic<'c>, a: &Dynamic<'c>) -> Bool<'c
 }
 
 /// Returns a universally quantified formula for non-null constraint:
-/// ∀ t. (r(t)>0 ⇒ ¬IsNull(a(t)))
+/// ∀ t. (r(t) > 0 ⇒ ¬IsNull(a(t)))
 pub fn not_null<'c>(ctx: &'c Context, r: &Dynamic<'c>, a: &Dynamic<'c>) -> Bool<'c> {
     let tuple_sort = ctx.named_sort("Tuple").expect("Tuple sort must be defined");
     let t = Dynamic::new_const(ctx, "t", &tuple_sort);
@@ -122,8 +122,8 @@ pub fn not_null<'c>(ctx: &'c Context, r: &Dynamic<'c>, a: &Dynamic<'c>) -> Bool<
     Bool::forall_const(ctx, &[&t], &[], &cond)
 }
 
-/// Helper: returns a formula that checks if `expr` is equal to the distinguished NULL.
-/// This assumes a distinguished NULL constant is defined for the sort of `expr`.
+/// Helper: returns a formula that checks if `expr` equals the distinguished NULL.
+/// This function assumes that a distinguished NULL constant is defined for the sort of `expr`.
 pub fn is_null<'c>(ctx: &'c Context, expr: &Dynamic<'c>) -> Bool<'c> {
     let null_const = Dynamic::fresh_const(ctx, "null", &expr.get_sort());
     expr._eq(&null_const)

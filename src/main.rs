@@ -1,10 +1,10 @@
 #![feature(slice_as_chunks)]
 #![feature(if_let_guard)]
 #![feature(let_chains)]
+
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io;
 use std::io::{BufReader, Read, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
@@ -16,29 +16,23 @@ use walkdir::WalkDir;
 
 use crate::pipeline::{unify, Input, Stats};
 
-// Add
-use std::env;
-use std::fs::File;
-use std::io::{BufReader, Read};
-use std::collections::HashMap;
-use serde_json::from_reader;
-use z3::{Config, Context, Solver};
-
-use crate::pipeline::{unify, Input};
-use crate::pipeline::shared::{DataType, get_relation, get_attribute, assert_constraints_from_file};
-
 mod pipeline;
 
-fn visit<P: AsRef<Path>>(dir: P, mut cb: impl FnMut(usize, &Path)) -> io::Result<()> {
-	WalkDir::new(dir)
-		.into_iter()
-		.filter_map(|f| {
-			f.ok().filter(|f| f.path().is_file() && f.path().extension() == Some("json".as_ref()))
-		})
-		.sorted_by_cached_key(|e| e.metadata().unwrap().size())
-		.enumerate()
-		.for_each(|(i, e)| cb(i, e.path()));
-	Ok(())
+use std::env;
+use serde_json::from_reader;
+use z3::{Config, Context, Solver};
+use crate::pipeline::shared::{DataType, get_relation, get_attribute, assert_constraints_from_file};
+
+fn visit<P: AsRef<Path>>(dir: P, mut cb: impl FnMut(usize, &Path)) -> std::io::Result<()> {
+    WalkDir::new(dir)
+        .into_iter()
+        .filter_map(|f| {
+            f.ok().filter(|f| f.path().is_file() && f.path().extension() == Some("json".as_ref()))
+        })
+        .sorted_by_cached_key(|e| e.metadata().unwrap().size())
+        .enumerate()
+        .for_each(|(i, e)| cb(i, e.path()));
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -121,70 +115,68 @@ enum CosetteResult {
 }*/
 
 fn main() -> std::io::Result<()> {
-	let args: Vec<String> = env::args().collect();
-	if args.len() < 2 {
-		eprintln!("Usage: {} <input.json> [-c <constraints.txt>]", args[0]);
-		std::process::exit(1);
-	}
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 2 {
+        eprintln!("Usage: {} <input.json> [-c <constraints.txt>]", args[0]);
+        std::process::exit(1);
+    }
 
-	// Parse the input JSON file.
-	let input_file = &args[1];
-	let file = File::open(input_file)?;
-	let reader = BufReader::new(file);
-	let input: Input = from_reader(reader).expect("Failed to parse input JSON");
+    // Parse the input JSON file.
+    let input_file = &args[1];
+    let file = File::open(input_file)?;
+    let reader = BufReader::new(file);
+    let input: Input = from_reader(reader).expect("Failed to parse input JSON");
 
-	// Initialize Z3.
-	let config = Config::new();
-	let ctx = Context::new(&config);
-	let solver = Solver::new(&ctx);
+    // Initialize Z3.
+    let config = Config::new();
+    let ctx = Context::new(&config);
+    let solver = Solver::new(&ctx);
 
-	// Build symbol maps from schemas.
-	let mut schema_map: HashMap<String, z3::ast::Dynamic> = HashMap::new();
-	let mut attr_map: HashMap<(String, String), z3::ast::Dynamic> = HashMap::new();
+    // Build symbol maps from schemas.
+    let mut schema_map: HashMap<String, z3::ast::Dynamic> = HashMap::new();
+    let mut attr_map: HashMap<(String, String), z3::ast::Dynamic> = HashMap::new();
 
-	for schema in &input.schemas {
-		let table_name = schema.name.clone();
-		let rel = get_relation(&ctx, &table_name);
-		schema_map.insert(table_name.clone(), rel);
-		for (attr, dt_str) in schema.fields.iter().zip(schema.types.iter()) {
-			// Convert string to DataType; adjust to your actual DataType variants.
-			let dt = match dt_str.as_str() {
-				"INTEGER" => DataType::Integer,
-				"VARCHAR" => DataType::Varchar,
-				"REAL" => DataType::Real,
-				other => DataType::Custom(other.to_string()),
-			};
-			let attr_sym = get_attribute(&ctx, &table_name, attr, &dt);
-			attr_map.insert((table_name.clone(), attr.clone()), attr_sym);
-		}
-	}
+    for schema in &input.schemas {
+        let table_name = schema.name.clone();
+        let rel = get_relation(&ctx, &table_name);
+        schema_map.insert(table_name.clone(), rel);
+        for (attr, dt_str) in schema.fields.iter().zip(schema.types.iter()) {
+            let dt = match dt_str.as_str() {
+                "INTEGER" => DataType::Integer,
+                "VARCHAR" => DataType::String, // Use String variant for VARCHAR.
+                "REAL" => DataType::Real,
+                other => DataType::Custom(other.to_string()),
+            };
+            let attr_sym = get_attribute(&ctx, &table_name, attr, &dt);
+            attr_map.insert((table_name.clone(), attr.to_string()), attr_sym);
+        }
+    }
 
-	// Read constraints file if provided.
-	let mut constraints_text = String::new();
-	if let Some(c_index) = args.iter().position(|arg| arg == "-c") {
-		if c_index + 1 < args.len() {
-			let constraints_file = &args[c_index + 1];
-			let mut file = File::open(constraints_file)?;
-			file.read_to_string(&mut constraints_text)?;
-		} else {
-			eprintln!("Error: -c flag provided but no file specified.");
-			std::process::exit(1);
-		}
-	}
+    // Read constraints file if provided.
+    let mut constraints_text = String::new();
+    if let Some(c_index) = args.iter().position(|arg| arg == "-c") {
+        if c_index + 1 < args.len() {
+            let constraints_file = &args[c_index + 1];
+            let mut file = File::open(constraints_file)?;
+            file.read_to_string(&mut constraints_text)?;
+        } else {
+            eprintln!("Error: -c flag provided but no file specified.");
+            std::process::exit(1);
+        }
+    }
 
-	// If constraints were provided, assert them into the solver.
-	if !constraints_text.is_empty() {
-		assert_constraints_from_file(&ctx, &solver, &constraints_text, &schema_map, &attr_map);
-	}
+    if !constraints_text.is_empty() {
+        assert_constraints_from_file(&ctx, &solver, &constraints_text, &schema_map, &attr_map);
+    }
 
-	// Run QED's equivalence checking.
-	let (provable, stats) = unify(input);
-	if provable {
-		println!("Queries are equivalent.");
-	} else {
-		println!("Queries are NOT equivalent.");
-	}
-	println!("Statistics: {:?}", stats);
+    // Run QED's equivalence checking.
+    let (provable, stats) = unify(input);
+    if provable {
+        println!("Queries are equivalent.");
+    } else {
+        println!("Queries are NOT equivalent.");
+    }
+    println!("Statistics: {:?}", stats);
 
-	Ok(())
+    Ok(())
 }
