@@ -15,8 +15,9 @@ use serde_enum_str::{Deserialize_enum_str, Serialize_enum_str};
 use z3::ast::{Ast, Dynamic};
 use z3::{Context, FuncDecl, Sort};
 
+use z3::{ast::{Dynamic, Bool}, Context, Solver, Sort};
 use crate::pipeline::constraints::*;
-use crate::pipeline::shared::DataType;
+use std::collections::HashMap;
 
 pub trait Eval<S, T> {
 	fn eval(self, source: S) -> T;
@@ -548,43 +549,58 @@ impl<'c> Ctx<'c> {
 	}
 }
 
-/// Returns an uninterpreted constant for a relation identified by `table_name`.
+/// Assume that DataType is already defined uniquely in this module.
+/// Example:
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DataType {
+	Integer,
+	Real,
+	Varchar,
+	Custom(String),
+}
+
+/// Returns an uninterpreted constant representing a relation symbol for the given table.
 pub fn get_relation<'c>(ctx: &'c Context, table_name: &str) -> Dynamic<'c> {
-	// Use an uninterpreted sort "Relation"
-	let rel_sort = Sort::uninterpreted(ctx, &z3::Symbol::String("Relation".to_string()));
+	// Create an uninterpreted sort "Relation"
+	let rel_sort = Sort::uninterpreted(ctx, z3::Symbol::String("Relation".to_string()));
 	Dynamic::fresh_const(ctx, &format!("table_{}", table_name), &rel_sort)
 }
 
-/// Returns an uninterpreted constant for an attribute of a relation.
-/// The sort is determined based on `data_type`: for "INTEGER" use int_sort,
-/// for "VARCHAR" use string_sort, etc.
+/// Returns an uninterpreted constant for an attribute given the table name, attribute name, and its data type.
 pub fn get_attribute<'c>(ctx: &'c Context, table_name: &str, attr: &str, data_type: &DataType) -> Dynamic<'c> {
 	let sort = match data_type {
-		DataType::INTEGER => ctx.int_sort(),
-		DataType::REAL => ctx.real_sort(),
-		DataType::VARCHAR | DataType::CHAR | DataType::TEXT => ctx.string_sort(),
-		_ => Sort::uninterpreted(ctx, &z3::Symbol::String("Custom".to_string())),
+		DataType::Integer => Sort::int(ctx),
+		DataType::Real => Sort::real(ctx),
+		DataType::Varchar => Sort::string(ctx),
+		DataType::Custom(_) => Sort::uninterpreted(ctx, z3::Symbol::String("Custom".to_string())),
 	};
 	Dynamic::fresh_const(ctx, &format!("{}_{}", table_name, attr), &sort)
 }
 
-/// Asserts a list of constraint axioms (provided as strings with comma-separated arguments)
-/// into the given Z3 solver.
-/// The constraints are read from a file and parsed into corresponding formulas.
-pub fn assert_constraints_from_file<'c>(ctx: &'c Context, solver: &Solver, constraints: &str, schema_map: &HashMap<String, Dynamic<'c>>, attr_map: &HashMap<(String, String), Dynamic<'c>>) {
-	// Each line in constraints is of the format "FunctionName,arg1,arg2,..."
+/// Asserts constraint axioms from a constraints string (each line a comma‐separated list)
+/// into the given solver. The symbol maps are used to look up relation and attribute symbols.
+pub fn assert_constraints_from_file<'c>(
+	ctx: &'c Context,
+	solver: &Solver,
+	constraints: &str,
+	schema_map: &HashMap<String, Dynamic<'c>>,
+	attr_map: &HashMap<(String, String), Dynamic<'c>>,
+) {
 	for line in constraints.lines() {
 		let line = line.trim();
 		if line.is_empty() { continue; }
 		let parts: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
 		match parts.as_slice() {
-			// NotNull, table, attr
+			// Format: NotNull, table, attr
 			["NotNull", table, attr] => {
-				if let (Some(rel), Some(attribute)) = (schema_map.get(&table.to_string()), attr_map.get(&(table.to_string(), attr.to_string()))) {
+				if let (Some(rel), Some(attribute)) = (
+					schema_map.get(&table.to_string()),
+					attr_map.get(&(table.to_string(), attr.to_string()))
+				) {
 					solver.assert(&not_null(ctx, rel, attribute));
 				}
 			},
-			// RefAttr, r1, a1, r2, a2
+			// Format: RefAttr, r1, a1, r2, a2
 			["RefAttr", r1, a1, r2, a2] => {
 				if let (Some(rel1), Some(attr1), Some(rel2), Some(attr2)) = (
 					schema_map.get(&r1.to_string()),
@@ -595,11 +611,10 @@ pub fn assert_constraints_from_file<'c>(ctx: &'c Context, solver: &Solver, const
 					solver.assert(&ref_attr(ctx, rel1, attr1, rel2, attr2));
 				}
 			},
-			// Additional constraints can be added here (RelEq, AttrsEq, PredEq, SubAttr, Unique)
-			// For brevity, only NotNull and RefAttr are shown.
-			_ => {
-				// Unknown constraint type: skip or log an error.
-			}
+			// TODO: You can add additional cases for RelEq, AttrsEq, PredEq, SubAttr, Unique, etc.
+			// _ => {
+			// 	// For unknown constraint types, log a warning or skip.
+			// }
 		}
 	}
 }

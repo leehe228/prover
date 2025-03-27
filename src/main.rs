@@ -16,7 +16,15 @@ use walkdir::WalkDir;
 
 use crate::pipeline::{unify, Input, Stats};
 
-use crate::pipeline::pipeline; // assume this module contains the `unify` function and Input type
+// Add
+use std::env;
+use std::fs::File;
+use std::io::{BufReader, Read};
+use std::collections::HashMap;
+use serde_json::from_reader;
+use z3::{Config, Context, Solver};
+
+use crate::pipeline::{unify, Input};
 use crate::pipeline::shared::{DataType, get_relation, get_attribute, assert_constraints_from_file};
 
 mod pipeline;
@@ -119,18 +127,18 @@ fn main() -> std::io::Result<()> {
 		std::process::exit(1);
 	}
 
-	// First argument is the input JSON file.
+	// Parse the input JSON file.
 	let input_file = &args[1];
 	let file = File::open(input_file)?;
 	let reader = BufReader::new(file);
-	let input: pipeline::Input = from_reader(reader).expect("Failed to parse input JSON");
+	let input: Input = from_reader(reader).expect("Failed to parse input JSON");
 
-	// Set up Z3.
+	// Initialize Z3.
 	let config = Config::new();
 	let ctx = Context::new(&config);
 	let solver = Solver::new(&ctx);
 
-	// Build a mapping from table name to relation symbol and from (table, attr) to attribute symbol.
+	// Build symbol maps from schemas.
 	let mut schema_map: HashMap<String, z3::ast::Dynamic> = HashMap::new();
 	let mut attr_map: HashMap<(String, String), z3::ast::Dynamic> = HashMap::new();
 
@@ -138,19 +146,20 @@ fn main() -> std::io::Result<()> {
 		let table_name = schema.name.clone();
 		let rel = get_relation(&ctx, &table_name);
 		schema_map.insert(table_name.clone(), rel);
-		for (attr, data_type_str) in schema.fields.iter().zip(schema.types.iter()) {
-			// Convert data_type_str to DataType (this may involve parsing; here we assume simple matching)
-			let dt = match data_type_str.as_str() {
-				"INTEGER" => DataType::INTEGER,
-				"VARCHAR" => DataType::VARCHAR,
-				_ => DataType::Custom(data_type_str.clone()),
+		for (attr, dt_str) in schema.fields.iter().zip(schema.types.iter()) {
+			// Convert string to DataType; adjust to your actual DataType variants.
+			let dt = match dt_str.as_str() {
+				"INTEGER" => DataType::Integer,
+				"VARCHAR" => DataType::Varchar,
+				"REAL" => DataType::Real,
+				other => DataType::Custom(other.to_string()),
 			};
 			let attr_sym = get_attribute(&ctx, &table_name, attr, &dt);
 			attr_map.insert((table_name.clone(), attr.clone()), attr_sym);
 		}
 	}
 
-	// If "-c" parameter is provided, read the constraints file.
+	// Read constraints file if provided.
 	let mut constraints_text = String::new();
 	if let Some(c_index) = args.iter().position(|arg| arg == "-c") {
 		if c_index + 1 < args.len() {
@@ -163,13 +172,13 @@ fn main() -> std::io::Result<()> {
 		}
 	}
 
-	// If constraints were provided, assert them.
+	// If constraints were provided, assert them into the solver.
 	if !constraints_text.is_empty() {
 		assert_constraints_from_file(&ctx, &solver, &constraints_text, &schema_map, &attr_map);
 	}
 
-	// Now, call QED's equivalence checking. (Assuming unify(input) returns (bool, Stats))
-	let (provable, stats) = pipeline::unify(input);
+	// Run QED's equivalence checking.
+	let (provable, stats) = unify(input);
 	if provable {
 		println!("Queries are equivalent.");
 	} else {
