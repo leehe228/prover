@@ -487,12 +487,12 @@ impl<'c> Ctx<'c> {
 
 	pub fn sort(&self, ty: &DataType) -> Sort<'c> {
 		use DataType::*;
-		match ty {
+		match *ty {
 			Boolean => self.bool_sort(),
 			String => self.string_sort(),
 			Integer => self.int_sort(),
 			Real => self.real_sort(),
-			Custom(ty) => self.generic_sort(ty),
+			Custom(ref s) => self.generic_sort(s),
 		}
 	}
 
@@ -503,12 +503,12 @@ impl<'c> Ctx<'c> {
 	pub fn strict_sort(&self, ty: &DataType) -> Sort<'c> {
 		let z3_ctx = self.z3_ctx();
 		use DataType::*;
-		match ty {
-			&Boolean => Sort::bool(z3_ctx),
-			&String => Sort::string(z3_ctx),
-			&Integer => Sort::int(z3_ctx),
-			&Real => Sort::real(z3_ctx),
-			&Custom(ref s) => Sort::uninterpreted(z3_ctx, z3::Symbol::String(s.clone())),
+		match *ty {
+			Boolean => Sort::bool(z3_ctx),
+			String => Sort::string(z3_ctx),
+			Integer => Sort::int(z3_ctx),
+			Real => Sort::real(z3_ctx),
+			Custom(ref s) => Sort::uninterpreted(z3_ctx, z3::Symbol::String(s.clone())),
 		}
 	}
 
