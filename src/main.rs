@@ -43,7 +43,7 @@ enum CosetteResult {
 	Panic(Box<dyn Any + Send>),
 }
 
-/* fn main() -> io::Result<()> {
+fn main() -> io::Result<()> {
 	Builder::from_env(Env::default().default_filter_or("off"))
 		.format(|buf, record| writeln!(buf, "{}", record.args()))
 		.target(Target::Stdout)
@@ -112,9 +112,9 @@ enum CosetteResult {
 	}
 	println!("Provable: {} / {}", al, al + bl);
 	Ok(())
-}*/
+}
 
-fn main() -> std::io::Result<()> {
+/* fn main() -> std::io::Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         eprintln!("Usage: {} <input.json> [-c <constraints.txt>]", args[0]);
@@ -182,4 +182,4 @@ fn main() -> std::io::Result<()> {
     println!("Statistics: {:?}", stats);
 
     Ok(())
-}
+}*/
