@@ -504,11 +504,11 @@ impl<'c> Ctx<'c> {
 		let z3_ctx = self.z3_ctx();
 		use DataType::*;
 		match ty {
-			Boolean => Sort::bool(z3_ctx),
-			String => Sort::string(z3_ctx),
-			Integer => Sort::int(z3_ctx),
-			Real => Sort::real(z3_ctx),
-			_ => panic!("unsupported type {:?}", ty),
+			&Boolean => Sort::bool(z3_ctx),
+			&String => Sort::string(z3_ctx),
+			&Integer => Sort::int(z3_ctx),
+			&Real => Sort::real(z3_ctx),
+			&Custom(ref s) => Sort::uninterpreted(z3_ctx, z3::Symbol::String(s.clone())),
 		}
 	}
 
