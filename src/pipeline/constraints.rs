@@ -9,9 +9,12 @@ use z3::{
 use imbl::{vector, Vector};
 
 /// Helper: apply a function-typed Dynamic value to arguments.
+/// This unwraps the function declaration from the Dynamic value and converts the arguments
+/// to the expected slice of trait objects.
 fn apply_dyn<'c>(d: &Dynamic<'c>, args: &[&Dynamic<'c>]) -> Dynamic<'c> {
-    // Unwrap the result of safe_decl() before applying the arguments.
-    d.safe_decl().expect("failed to get function declaration").apply(args)
+    let func_decl = d.safe_decl().expect("failed to get function declaration");
+    let ast_args: Vec<&dyn Ast> = args.iter().map(|a| *a as &dyn Ast).collect();
+    func_decl.apply(&ast_args)
 }
 
 /// Helper: a stub for universal quantification.
@@ -28,7 +31,6 @@ fn forall<'c>(
 
 /// Returns an uninterpreted sort for "Tuple".
 fn tuple_sort<'c>(ctx: &'c Context) -> z3::Sort<'c> {
-    // Create a new uninterpreted sort named "Tuple"
     z3::Sort::uninterpreted(ctx, z3::Symbol::String("Tuple".to_string()))
 }
 
@@ -91,7 +93,7 @@ pub fn ref_attr<'c>(
     let t2 = Dynamic::fresh_const(ctx, "t2", &ts);
     let r1_t1 = apply_dyn(r1, &[&t1]);
     let r2_t2 = apply_dyn(r2, &[&t2]);
-    // Cast to Int to use arithmetic comparisons.
+    // Convert relation values to integer (assuming they represent counts).
     let r1_t1_int = r1_t1.as_int().expect("Expected integer sort for r1");
     let r2_t2_int = r2_t2.as_int().expect("Expected integer sort for r2");
     let cond = Bool::and(ctx, &[
@@ -99,7 +101,7 @@ pub fn ref_attr<'c>(
         &Bool::not(&is_null(ctx, &apply_dyn(a1, &[&t1]))),
     ]);
     let eq = apply_dyn(a1, &[&t1])._eq(&apply_dyn(a2, &[&t2]));
-    // For existential quantification, we use a stub: we build the conjunction.
+    // For existential quantification, we build a conjunction as a stub.
     let exists_t2 = Bool::and(ctx, &[
         &r2_t2_int.gt(&Int::from_i64(ctx, 0)),
         &Bool::not(&is_null(ctx, &apply_dyn(a2, &[&t2]))),
