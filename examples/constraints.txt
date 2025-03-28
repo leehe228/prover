@@ -1,0 +1,2 @@
+NotNull,dept,dname
+RefAttr,emp,deptno,dept,deptno
