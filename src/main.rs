@@ -3,7 +3,7 @@
 #![feature(let_chains)]
 
 use std::any::Any;
-use std::collections::BTreeMap;
+use std::collections::HashMap; // Use HashMap here instead of BTreeMap
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
 use std::os::unix::fs::MetadataExt;
@@ -133,10 +133,12 @@ fn main() -> std::io::Result<()> {
     let solver = Solver::new(&ctx);
 
     // Build symbol maps from schemas.
-    let mut schema_map: BTreeMap<String, z3::ast::Dynamic> = BTreeMap::new();
-    let mut attr_map: BTreeMap<(String, String), z3::ast::Dynamic> = BTreeMap::new();
+    // (The function assert_constraints_from_file expects &HashMap<…>.)
+    let mut schema_map: HashMap<String, z3::ast::Dynamic> = HashMap::new();
+    let mut attr_map: HashMap<(String, String), z3::ast::Dynamic> = HashMap::new();
 
-    for schema in &input.schemas {
+    // Use a public accessor for schemas. (If Input does not provide get_schemas(), you must modify the parser’s Input type to make the field public.)
+    for schema in input.get_schemas() {
         let table_name = schema.name.clone();
         let rel = get_relation(&ctx, &table_name);
         schema_map.insert(table_name.clone(), rel);
