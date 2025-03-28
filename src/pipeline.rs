@@ -29,6 +29,14 @@ pub struct Input {
 	help: (String, String),
 }
 
+// Add the following impl block to expose the schemas via a getter.
+impl Input {
+	/// Returns a reference to the vector of Schema.
+	pub fn get_schemas(&self) -> &Vec<Schema> {
+		&self.schemas
+	}
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Stats {
 	pub provable: bool,
