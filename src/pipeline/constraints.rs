@@ -10,8 +10,8 @@ use imbl::{vector, Vector};
 
 /// Helper: apply a function-typed Dynamic value to arguments.
 fn apply_dyn<'c>(d: &Dynamic<'c>, args: &[&Dynamic<'c>]) -> Dynamic<'c> {
-    // Use the new safe_decl() method
-    d.safe_decl().apply(args)
+    // Unwrap the result of safe_decl() before applying the arguments.
+    d.safe_decl().expect("failed to get function declaration").apply(args)
 }
 
 /// Helper: a stub for universal quantification. In a full implementation,
