@@ -560,12 +560,28 @@ pub fn get_relation<'c>(ctx: &'c Context, table_name: &str) -> Dynamic<'c> {
 }
 
 /// Returns an uninterpreted constant for an attribute given the table name, attribute name, and its data type.
-pub fn get_attribute<'c>(ctx: &'c Context, table_name: &str, attr: &str, data_type: &DataType) -> Dynamic<'c> {
-	let sort = match data_type {
+// pub fn get_attribute<'c>(ctx: &'c Context, table_name: &str, attr: &str, data_type: &DataType) -> Dynamic<'c> {
+// 	let sort = match data_type {
+// 		DataType::Integer => Sort::int(ctx),
+// 		DataType::Real => Sort::real(ctx),
+// 		// Use the String variant for VARCHAR.
+// 		DataType::String => Sort::string(ctx),
+// 		DataType::Custom(_) => Sort::uninterpreted(ctx, z3::Symbol::String("Custom".to_string())),
+// 	};
+// 	Dynamic::fresh_const(ctx, &format!("{}_{}", table_name, attr), &sort)
+// }
+
+pub fn get_attribute<'c>(
+	ctx: &'c Context,
+	table_name: &str,
+	attr: &str,
+	data_type: &DataType,
+) -> Dynamic<'c> {
+	let sort = match *data_type {
 		DataType::Integer => Sort::int(ctx),
 		DataType::Real => Sort::real(ctx),
-		// Use the String variant for VARCHAR.
 		DataType::String => Sort::string(ctx),
+		DataType::Boolean => Sort::bool(ctx), // 추가: Boolean 처리
 		DataType::Custom(_) => Sort::uninterpreted(ctx, z3::Symbol::String("Custom".to_string())),
 	};
 	Dynamic::fresh_const(ctx, &format!("{}_{}", table_name, attr), &sort)
