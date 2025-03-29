@@ -116,10 +116,6 @@ fn main() -> io::Result<()> {
 	Ok(())
 }*/
 
-#![feature(slice_as_chunks)]
-#![feature(if_let_guard)]
-#![feature(let_chains)]
-
 use std::any::Any;
 use std::collections::HashMap;
 use std::fs::File;

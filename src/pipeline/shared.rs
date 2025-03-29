@@ -35,6 +35,8 @@ impl Display for VL {
 /// (Make the fields public so main.rs can iterate them.)
 #[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Schema {
+	pub name: String,
+	pub fields: Vec<String>,
 	pub types: Vec<DataType>,
 	#[serde(rename = "key")]
 	pub primary: Vec<HashSet<usize>>,
