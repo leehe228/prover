@@ -619,7 +619,9 @@ pub fn assert_constraints_from_file<'c>(
 ) {
 	for line in constraints.lines() {
 		let line = line.trim();
-		if line.is_empty() { continue; }
+		if line.is_empty() {
+			continue;
+		}
 		let parts: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
 		match parts.as_slice() {
 			// Format: NotNull, table, attr
@@ -642,9 +644,57 @@ pub fn assert_constraints_from_file<'c>(
 					solver.assert(&ref_attr(ctx, rel1, attr1, rel2, attr2));
 				}
 			}
-			// TODO: Additional cases for RelEq, AttrsEq, PredEq, SubAttr, Unique, etc. can be added here.
+			// Format: RelEq, r1, r2
+			["RelEq", r1, r2] => {
+				if let (Some(rel1), Some(rel2)) = (
+					schema_map.get(&r1.to_string()),
+					schema_map.get(&r2.to_string()),
+				) {
+					solver.assert(&rel_eq(ctx, rel1, rel2));
+				}
+			}
+			// Format: AttrsEq, a1, a2
+			["AttrsEq", a1, a2] => {
+				if let (Some(attr1), Some(attr2)) = (
+					attr_map.get(&(a1.to_string(), a1.to_string())),
+					attr_map.get(&(a2.to_string(), a2.to_string())),
+				) {
+					// Note: In a real system you would need to map attribute names to their symbols.
+					// Here we assume that the argument strings directly identify the attribute symbol.
+					solver.assert(&attrs_eq(ctx, attr1, attr2));
+				}
+			}
+			// Format: PredEq, p1, p2
+			["PredEq", p1, p2] => {
+				// For predicates, we assume that the attribute names correspond to predicate symbols.
+				if let (Some(pred1), Some(pred2)) = (
+					attr_map.get(&(p1.to_string(), p1.to_string())),
+					attr_map.get(&(p2.to_string(), p2.to_string())),
+				) {
+					solver.assert(&pred_eq(ctx, pred1, pred2));
+				}
+			}
+			// Format: SubAttr, a1, a2
+			["SubAttr", a1, a2] => {
+				if let (Some(attr1), Some(attr2)) = (
+					attr_map.get(&(a1.to_string(), a1.to_string())),
+					attr_map.get(&(a2.to_string(), a2.to_string())),
+				) {
+					solver.assert(&sub_attr(ctx, attr1, attr2));
+				}
+			}
+			// Format: Unique, r, a
+			["Unique", r, a] => {
+				if let (Some(rel), Some(attr)) = (
+					schema_map.get(&r.to_string()),
+					attr_map.get(&(r.to_string(), a.to_string())),
+				) {
+					solver.assert(&unique(ctx, rel, attr));
+				}
+			}
 			_ => {
-				// For unknown constraint types, you could log a warning or simply skip.
+				// For unknown constraint types, log a warning or simply skip.
+				// e.g., log::warn!("Unknown constraint type in line: {}", line);
 			}
 		}
 	}
