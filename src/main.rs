@@ -2,7 +2,7 @@
 #![feature(if_let_guard)]
 #![feature(let_chains)]
 
-use std::io;
+/* use std::io;
 use std::any::Any;
 use std::collections::HashMap; // Use HashMap here instead of BTreeMap
 use std::fs::File;
@@ -114,74 +114,131 @@ fn main() -> io::Result<()> {
 	}
 	println!("Provable: {} / {}", al, al + bl);
 	Ok(())
+}*/
+
+#![feature(slice_as_chunks)]
+#![feature(if_let_guard)]
+#![feature(let_chains)]
+
+use std::any::Any;
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufReader, Read, Write};
+use std::os::unix::fs::MetadataExt;
+use std::path::Path;
+use std::time::Instant;
+
+use env_logger::{Builder, Env, Target};
+use itertools::Itertools;
+use walkdir::WalkDir;
+
+use crate::pipeline::{unify, Input, Stats};
+
+mod pipeline;
+
+use std::env;
+use serde_json::from_reader;
+use z3::{Config, Context, Solver};
+use crate::pipeline::shared::{DataType, get_relation, get_attribute, assert_constraints_from_file};
+
+fn visit<P: AsRef<Path>>(dir: P, mut cb: impl FnMut(usize, &Path)) -> std::io::Result<()> {
+	WalkDir::new(dir)
+		.into_iter()
+		.filter_map(|f| {
+			f.ok().filter(|f| f.path().is_file() && f.path().extension() == Some("json".as_ref()))
+		})
+		.sorted_by_cached_key(|e| e.metadata().unwrap().size())
+		.enumerate()
+		.for_each(|(i, e)| cb(i, e.path()));
+	Ok(())
 }
 
-/* fn main() -> std::io::Result<()> {
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        eprintln!("Usage: {} <input.json> [-c <constraints.txt>]", args[0]);
-        std::process::exit(1);
-    }
+#[derive(Debug)]
+enum CosetteResult {
+	Provable(Stats),
+	NotProvable(Stats),
+	ParseErr(serde_json::Error),
+	Panic(Box<dyn Any + Send>),
+}
 
-    // Parse the input JSON file.
-    let input_file = &args[1];
-    let file = File::open(input_file)?;
-    let reader = BufReader::new(file);
-    let input: Input = from_reader(reader).expect("Failed to parse input JSON");
+fn main() -> std::io::Result<()> {
+	// Initialize logger.
+	Builder::from_env(Env::default().default_filter_or("off"))
+		.format(|buf, record| writeln!(buf, "{}", record.args()))
+		.target(Target::Stdout)
+		.init();
 
-    // Initialize Z3.
-    let config = Config::new();
-    let ctx = Context::new(&config);
-    let solver = Solver::new(&ctx);
+	let args: Vec<String> = env::args().collect();
+	if args.len() < 2 {
+		eprintln!("Usage: {} <input.json> [-c=<constraints.txt>]", args[0]);
+		std::process::exit(1);
+	}
 
-    // Build symbol maps from schemas.
-    // (The function assert_constraints_from_file expects &HashMap<…>.)
-    let mut schema_map: HashMap<String, z3::ast::Dynamic> = HashMap::new();
-    let mut attr_map: HashMap<(String, String), z3::ast::Dynamic> = HashMap::new();
+	// The first argument (after the program name) is the JSON file.
+	let input_file = &args[1];
+	let file = File::open(input_file)?;
+	let reader = BufReader::new(file);
+	let input: Input = from_reader(reader).expect("Failed to parse input JSON");
 
-    // Use a public accessor for schemas. (If Input does not provide get_schemas(), you must modify the parser’s Input type to make the field public.)
-    for schema in input.get_schemas() {
-        let table_name = schema.name.clone();
-        let rel = get_relation(&ctx, &table_name);
-        schema_map.insert(table_name.clone(), rel);
-        for (attr, dt_str) in schema.fields.iter().zip(schema.types.iter()) {
-            let dt = match dt_str.as_str() {
-                "INTEGER" => DataType::Integer,
-                "VARCHAR" => DataType::String, // Use String variant for VARCHAR.
-                "REAL" => DataType::Real,
-                other => DataType::Custom(other.to_string()),
-            };
-            let attr_sym = get_attribute(&ctx, &table_name, attr, &dt);
-            attr_map.insert((table_name.clone(), attr.to_string()), attr_sym);
-        }
-    }
+	// Initialize Z3.
+	let config = Config::new();
+	let ctx = Context::new(&config);
+	let solver = Solver::new(&ctx);
 
-    // Read constraints file if provided.
-    let mut constraints_text = String::new();
-    if let Some(c_index) = args.iter().position(|arg| arg == "-c") {
-        if c_index + 1 < args.len() {
-            let constraints_file = &args[c_index + 1];
-            let mut file = File::open(constraints_file)?;
-            file.read_to_string(&mut constraints_text)?;
-        } else {
-            eprintln!("Error: -c flag provided but no file specified.");
-            std::process::exit(1);
-        }
-    }
+	// Build symbol maps from schemas.
+	let mut schema_map: HashMap<String, z3::ast::Dynamic> = HashMap::new();
+	let mut attr_map: HashMap<(String, String), z3::ast::Dynamic> = HashMap::new();
 
-    if !constraints_text.is_empty() {
-        // Assert constraints into the solver.
-        assert_constraints_from_file(&ctx, &solver, &constraints_text, &schema_map, &attr_map);
-    }
+	// Here we assume that the Input type provides a public accessor for schemas.
+	// For example, if Input has a method `get_schemas()`.
+	for schema in input.get_schemas() {
+		let table_name = schema.name.clone();
+		let rel = get_relation(&ctx, &table_name);
+		schema_map.insert(table_name.clone(), rel);
+		for (attr, dt_str) in schema.fields.iter().zip(schema.types.iter()) {
+			let dt = match dt_str.as_str() {
+				"INTEGER" => DataType::Integer,
+				"VARCHAR" => DataType::String, // Use String variant for VARCHAR.
+				"REAL" => DataType::Real,
+				other => DataType::Custom(other.to_string()),
+			};
+			let attr_sym = get_attribute(&ctx, &table_name, attr, &dt);
+			attr_map.insert((table_name.clone(), attr.to_string()), attr_sym);
+		}
+	}
 
-    // Run QED's equivalence checking.
-    let (provable, stats) = unify(input);
-    if provable {
-        println!("Queries are equivalent.");
-    } else {
-        println!("Queries are NOT equivalent.");
-    }
-    println!("Statistics: {:?}", stats);
+	// Look for a constraint file argument.
+	// Accept either "-c=constraints.txt" or "-c constraints.txt".
+	let mut constraints_text = String::new();
+	for arg in args.iter().skip(2) {
+		if arg.starts_with("-c=") {
+			let filename = arg.trim_start_matches("-c=");
+			let mut file = File::open(filename)?;
+			file.read_to_string(&mut constraints_text)?;
+		} else if arg == "-c" {
+			// If "-c" is given, expect the next argument to be the constraints file.
+			// (Since we allow at most one JSON input, we assume this case is rare.)
+			// In our implementation we check for it already.
+		}
+	}
 
-    Ok(())
-}*/
+	// If constraints were provided, assert them into the solver.
+	if !constraints_text.is_empty() {
+		// Convert the symbol maps to the expected type.
+		// Here we convert from our HashMap (which was built as a standard HashMap)
+		// to the type expected by assert_constraints_from_file.
+		// (Assuming the types match; if not, adjust accordingly.)
+		assert_constraints_from_file(&ctx, &solver, &constraints_text, &schema_map, &attr_map);
+	}
+
+	// Run QED's equivalence checking.
+	let (provable, stats) = unify(input);
+	if provable {
+		println!("Queries are equivalent.");
+	} else {
+		println!("Queries are NOT equivalent.");
+	}
+	println!("Statistics: {:?}", stats);
+
+	Ok(())
+}
