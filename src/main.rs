@@ -191,13 +191,18 @@ fn main() -> std::io::Result<()> {
 		let table_name = schema.name.clone();
 		let rel = get_relation(&ctx, &table_name);
 		schema_map.insert(table_name.clone(), rel);
-		for (attr, dt_str) in schema.fields.iter().zip(schema.types.iter()) {
-			let dt = match dt_str.as_str() {
-				"INTEGER" => DataType::Integer,
-				"VARCHAR" => DataType::String, // Use String variant for VARCHAR.
-				"REAL" => DataType::Real,
-				other => DataType::Custom(other.to_string()),
-			};
+		// for (attr, dt_str) in schema.fields.iter().zip(schema.types.iter()) {
+		// 	let dt = match dt_str.as_str() {
+		// 		"INTEGER" => DataType::Integer,
+		// 		"VARCHAR" => DataType::String, // Use String variant for VARCHAR.
+		// 		"REAL" => DataType::Real,
+		// 		other => DataType::Custom(other.to_string()),
+		// 	};
+		// 	let attr_sym = get_attribute(&ctx, &table_name, attr, &dt);
+		// 	attr_map.insert((table_name.clone(), attr.to_string()), attr_sym);
+		// }
+		for (attr, dt_enum) in schema.fields.iter().zip(schema.types.iter()) {
+			let dt = dt_enum.clone();
 			let attr_sym = get_attribute(&ctx, &table_name, attr, &dt);
 			attr_map.insert((table_name.clone(), attr.to_string()), attr_sym);
 		}
