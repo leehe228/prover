@@ -511,6 +511,18 @@ impl Eval<(AggCall, Relation), syntax::Expr> for Env<'_> {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub enum Constraint {
+    RelEq(VL, VL),
+    AttrsEq(Vec<Expr>, Vec<Expr>),
+    PredEq(Box<Expr>, Box<Expr>),
+    SubAttrs(Vec<Expr>, Vec<Expr>),
+    RefAttrs(VL, Vec<Expr>, VL, Vec<Expr>),
+    Unique(VL, Vec<Expr>),
+    NotNull(VL, Vec<Expr>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[serde(untagged)]
 pub enum Expr {
 	Col {
