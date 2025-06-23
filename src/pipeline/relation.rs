@@ -510,15 +510,15 @@ impl Eval<(AggCall, Relation), syntax::Expr> for Env<'_> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Constraint {
-    RelEq(VL, VL),
-    AttrsEq(Vec<Expr>, Vec<Expr>),
-    PredEq(Box<Expr>, Box<Expr>),
-    SubAttrs(Vec<Expr>, Vec<Expr>),
-    RefAttrs(VL, Vec<Expr>, VL, Vec<Expr>),
-    Unique(VL, Vec<Expr>),
-    NotNull(VL, Vec<Expr>),
+    RelEq { r1: VL, r2: VL },
+    Unique { r: VL, a: Vec<Expr> },
+    NotNull { r: VL, a: Vec<Expr> },
+    RefAttrs { r1: VL, a1: Vec<Expr>, r2: VL, a2: Vec<Expr> },
+    AttrsEq { a1: Vec<Expr>, a2: Vec<Expr> },
+    PredEq { p1: Box<Expr>, p2: Box<Expr> },
+    SubAttrs { a1: Vec<Expr>, a2: Vec<Expr> },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -543,7 +543,7 @@ pub enum Expr {
 }
 
 impl Expr {
-	fn ty(&self) -> DataType {
+	pub fn ty(&self) -> DataType {
 		match self {
 			Expr::Col { ty, .. } => ty,
 			Expr::Op { ty, .. } => ty,

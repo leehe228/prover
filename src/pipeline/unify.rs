@@ -20,14 +20,18 @@ pub trait Unify<T> {
 #[derive(Clone)]
 pub struct UnifyEnv<'c>(pub Rc<Ctx<'c>>, pub Vector<Dynamic<'c>>, pub Vector<Dynamic<'c>>);
 
-impl UnifyEnv<'_> {
-	fn envs(&self) -> (Z3Env, Z3Env) {
+impl<'c> UnifyEnv<'c> {
+    fn envs(&self) -> (Z3Env<'c>, Z3Env<'c>) {
+        // let UnifyEnv(ctx, subst1, subst2) = self;
+        // let z3_env = Z3Env::empty(ctx.clone());
+        // let env1 = z3_env.extend_vals(subst1);
+        // let env2 = z3_env.extend_vals(subst2);
+        // (env1, env2)
 		let UnifyEnv(ctx, subst1, subst2) = self;
-		let z3_env = Z3Env::empty(ctx.clone());
-		let env1 = z3_env.extend_vals(subst1);
-		let env2 = z3_env.extend_vals(subst2);
-		(env1, env2)
-	}
+        let env1 = Z3Env::new(ctx.clone(), subst1.clone());
+        let env2 = Z3Env::new(ctx.clone(), subst2.clone());
+        (env1, env2)
+    }
 }
 
 impl<'c, T> Unify<Lambda<T>> for UnifyEnv<'c>
@@ -81,7 +85,7 @@ impl<'c> Unify<Vec<Expr>> for UnifyEnv<'c> {
 	}
 }
 
-impl Z3Env<'_> {
+impl<'c> Z3Env<'c> {
 	pub fn extract_equiv(&self) -> Bool {
 		let Z3Env { ctx, h_ops, aggs, rel_h_ops, .. } = self;
 		let (h_ops, aggs, rel_h_ops) = (&*h_ops.borrow(), &*aggs.borrow(), &*rel_h_ops.borrow());
@@ -194,7 +198,7 @@ impl<'c> Unify<Term> for UnifyEnv<'c> {
 	}
 }
 
-impl Unify<Inner> for UnifyEnv<'_> {
+impl<'c> Unify<Inner> for UnifyEnv<'c> {
 	fn unify(&self, t1: &Inner, t2: &Inner) -> bool {
 		let UnifyEnv(ctx, _, _) = self;
 		let (ref env1, ref env2) = self.envs();
@@ -209,10 +213,22 @@ impl Unify<Inner> for UnifyEnv<'_> {
 		solver.assert(&Bool::or(z3_ctx, &[&logic1, &logic2]));
 		let h_ops_equiv = env1.extract_equiv();
 		solver.pop(1);
-		log::info!("{}", equiv);
-		log::info!("{}", h_ops_equiv);
+
+		let premise = {
+            let constraints_formula = ctx.constraints_formula.borrow();
+            if let Some(constraints) = &*constraints_formula {
+                Bool::and(z3_ctx, &[&h_ops_equiv, constraints])
+            } else {
+                h_ops_equiv
+            }
+        };
+
+		log::info!("Premise: {}", premise);
+		log::info!("Equivalence Goal: {}", equiv);
+		// log::info!("{}", h_ops_equiv);
 		let unify_start = Instant::now();
-		let (res, timed_out) = smt(solver, h_ops_equiv.implies(&equiv));
+		// let (res, timed_out) = smt(solver, h_ops_equiv.implies(&equiv));
+		let (res, timed_out) = smt(solver, premise.implies(&equiv));
 		ctx.update_smt_duration(unify_start.elapsed(), timed_out);
 		res
 	}

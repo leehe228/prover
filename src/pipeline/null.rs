@@ -87,8 +87,8 @@ macro_rules! optional_fn {
 pub struct Ctx<'c> {
 	pub solver: Solver<'c>,
 	pub stats: Rc<RefCell<Stats>>,
-	sorts: Sorts<'c>,
-	pub constraints_formula: Option<Bool<'c>>,
+	pub(crate) sorts: Sorts<'c>,
+	pub constraints_formula: RefCell<Option<Bool<'c>>>,
 }
 
 macro_rules! ctx_impl {
@@ -109,7 +109,7 @@ macro_rules! ctx_impl {
                     .finish();)*
 				$($(optional_op!(solver, $sort, $lsort, $olsort; $def $args));*);*;
 				let sorts = Sorts { $($lsort),* };
-                Self { solver, stats: Rc::new(RefCell::new(stats)), sorts, constraints_formula: None }
+                Self { solver, stats: Rc::new(RefCell::new(stats)), sorts, constraints_formula: RefCell::new(None) }
             }
             pub fn new(solver: Solver<'c>) -> Self {
             	Self::new_with_stats(solver, Default::default())
@@ -315,4 +315,20 @@ impl<'c> Ctx<'c> {
 			&none._eq(e2).ite(&self.bool_none(), &self.bool_some(e1._eq(e2))),
 		)
 	}
+
+	pub fn is_some(&self, val: &Dynamic<'c>) -> Bool<'c> {
+        let sort = val.get_sort();
+        if sort == self.sorts.int.sort {
+            self.sorts.int.variants[1].tester.apply(&[val]).as_bool().unwrap()
+        } else if sort == self.sorts.real.sort {
+            self.sorts.real.variants[1].tester.apply(&[val]).as_bool().unwrap()
+        } else if sort == self.sorts.bool.sort {
+            self.sorts.bool.variants[1].tester.apply(&[val]).as_bool().unwrap()
+        } else if sort == self.sorts.string.sort {
+            self.sorts.string.variants[1].tester.apply(&[val]).as_bool().unwrap()
+        } else {
+            // For uninterpreted sorts, a simple check is to assert it's not the generic null constant.
+            val._eq(&self.generic_none(sort.to_string())).not()
+        }
+    }
 }

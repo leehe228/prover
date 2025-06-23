@@ -9,14 +9,14 @@ use imbl::{vector, HashSet, Vector};
 use indenter::indented;
 use itertools::Itertools;
 use num::ToPrimitive;
-use z3::ast::{exists_const, Ast, Bool, Dynamic, Int, Real as Re, String as Str};
+use z3::ast::{forall_const, exists_const, Ast, Bool, Dynamic, Int, Real as Re, String as Str};
 use z3::{Config, Context, Solver};
 
 use super::shared::{Ctx, Lambda, Sigma, Typed};
 use super::stable::{self, stablize};
 use super::unify::{Unify, UnifyEnv};
-use crate::pipeline::relation::{num_cmp, num_op};
-use crate::pipeline::shared::{DataType, Eval, Neutral as Neut, Terms, VL};
+use crate::pipeline::relation::{self, num_cmp, num_op, Expr as RelExpr};
+use crate::pipeline::shared::{DataType, Eval, Neutral as Neut, Schema, Terms, VL};
 use crate::pipeline::{partial, shared};
 
 pub type Relation = Lambda<UExpr>;
@@ -521,6 +521,207 @@ impl<'c> Z3Env<'c> {
 			),
 		}
 	}
+
+	fn eval_rel_expr(&self, e: &RelExpr, schemas: &[Schema]) -> Dynamic<'c> {
+        use crate::pipeline::shared::DataType::*;
+        use RelExpr::{Col, Op};
+        
+        match e {
+            Col { column, ty: _ } => self.subst[column.0].clone(),
+            Op { op, args, ty, rel: None } => {
+                let parse = |ctx: &Ctx<'c>, input: &str, ty: &DataType| -> anyhow::Result<Dynamic<'c>> {
+                    if input.to_lowercase() == "null" {
+                        return ctx.none(ty);
+                    }
+                    let z3_ctx = ctx.z3_ctx();
+                    Ok(match ty {
+                        Integer => ctx.int_some(Int::from_i64(z3_ctx, input.parse()?)),
+                        Real => {
+                            let r: f32 = input.parse()?;
+                            let r = num::rational::Ratio::from_float(r).unwrap();
+                            ctx.real_some(Re::from_real(
+                                z3_ctx,
+                                r.numer().to_i32().unwrap(),
+                                r.denom().to_i32().unwrap(),
+                            ))
+                        },
+                        Boolean => ctx.bool(Some(input.to_lowercase().parse()?)),
+                        String => ctx.string_some(Str::from_str(z3_ctx, input).unwrap()),
+                        Custom(_) => bail!("unsupported type {:?} for constant {}", ty, input),
+                    })
+                };
+
+                if args.is_empty() {
+                    if let Ok(val) = parse(&self.ctx, op, ty) {
+                        return val;
+                    }
+                }
+
+                let z3_args: Vec<_> = args.iter().map(|arg| self.eval_rel_expr(arg, schemas)).collect();
+                let z3_args_refs = z3_args.iter().collect_vec();
+                
+                // *** START: 상세 연산자 처리 로직 추가 ***
+                match op.as_str() {
+                    op if num_op(op) && ty == &Integer => match op {
+                        "+" | "PLUS" | "UNARY PLUS" => self.ctx.int_add_v(&z3_args_refs),
+                        "-" | "MINUS" | "UNARY MINUS" => self.ctx.int_sub_v(&z3_args_refs),
+                        "*" | "MULT" => self.ctx.int_mul_v(&z3_args_refs),
+                        "/" | "DIV" => self.ctx.int_div(z3_args_refs[0], z3_args_refs[1]),
+                        "%" => self.ctx.int_modulo(z3_args_refs[0], z3_args_refs[1]),
+                        _ => unreachable!(),
+                    },
+                    op if num_op(op) && ty == &Real => match op {
+                        "+" | "PLUS" | "UNARY PLUS" => self.ctx.real_add_v(&z3_args_refs),
+                        "-" | "MINUS" | "UNARY MINUS" => self.ctx.real_sub_v(&z3_args_refs),
+                        "*" | "MULT" => self.ctx.real_mul_v(&z3_args_refs),
+                        "/" | "DIV" => self.ctx.real_div(z3_args_refs[0], z3_args_refs[1]),
+                        _ => unreachable!(),
+                    },
+                    cmp @ (">" | "GT" | "<" | "LT" | ">=" | "GE" | "<=" | "LE") => {
+                        self.cmp(args[0].ty(), cmp, z3_args_refs[0], z3_args_refs[1])
+                    }
+                    "=" | "EQ" => self.equal(args[0].ty(), z3_args_refs[0], z3_args_refs[1]),
+                    "<>" | "!=" | "NE" => self.ctx.bool_not(&self.equal(args[0].ty(), z3_args_refs[0], z3_args_refs[1])),
+                    "NOT" if z3_args_refs.len() == 1 => self.ctx.bool_not(z3_args_refs[0]),
+                    "AND" => self.ctx.bool_and_v(&z3_args_refs),
+                    "OR" => self.ctx.bool_or_v(&z3_args_refs),
+                    _ => self.ctx.app(&format!("f!{}", op.replace('\'', "\"")), &z3_args_refs, ty, true),
+                }
+                // *** END: 상세 연산자 처리 로직 추가 ***
+            },
+            _ => unimplemented!("Complex expressions like subqueries in constraints are not supported yet"),
+        }
+    }
+
+    pub fn eval_constraints(&self, schemas: &[Schema], constraints: &Vec<relation::Constraint>) -> Bool<'c> {
+        let constraint_formulas: Vec<_> = constraints.iter()
+            .map(|c| self.eval_constraint(schemas, c))
+            .collect();
+        Bool::and(self.ctx.z3_ctx(), &constraint_formulas.iter().collect_vec())
+    }
+
+    fn get_rel_fn(&self, r_vl: &VL, scope: &Vector<DataType>) -> z3::FuncDecl<'c> {
+        let z3_ctx = self.ctx.z3_ctx();
+        let rel_name = format!("r!{}", r_vl.0);
+        let domain: Vec<_> = scope.iter().map(|ty| self.ctx.sort(ty)).collect();
+        let range = self.ctx.strict_sort(&DataType::Integer);
+        z3::FuncDecl::new(z3_ctx, rel_name, &domain.iter().collect_vec(), &range)
+    }
+
+    fn eval_constraint(&self, schemas: &[Schema], constraint: &relation::Constraint) -> Bool<'c> {
+        let z3_ctx = self.ctx.z3_ctx();
+        match constraint {
+            relation::Constraint::RelEq { r1: r1_vl, r2: r2_vl } => {
+                let schema1 = &schemas[r1_vl.0];
+                let scope: Vector<DataType> = schema1.types.clone().into();
+                assert_eq!(scope, schemas[r2_vl.0].types.clone().into(), "Schemas must be equal for RelEq");
+
+                let (_env_t, t_vars) = self.extend_vars(&scope);
+                let t_vars_ast: Vec<_> = t_vars.iter().map(|v| v as &dyn Ast).collect();
+
+                let rel1_fn = self.get_rel_fn(r1_vl, &scope);
+                let rel2_fn = self.get_rel_fn(r2_vl, &scope);
+
+                let r1_of_t = rel1_fn.apply(&t_vars_ast);
+                let r2_of_t = rel2_fn.apply(&t_vars_ast);
+
+                let body = r1_of_t._eq(&r2_of_t);
+                forall_const(z3_ctx, &t_vars_ast, &[], &body)
+            }
+            relation::Constraint::Unique { r: r_vl, a: attrs_expr } => {
+                let schema = &schemas[r_vl.0];
+                let scope: Vector<DataType> = schema.types.clone().into();
+
+                let (env_t, t_vars) = self.extend_vars(&scope);
+                let (env_t_prime, t_prime_vars) = self.extend_vars(&scope);
+
+                let t_vars_ast: Vec<_> = t_vars.iter().map(|v| v as &dyn Ast).collect();
+                let all_t_vars_ast: Vec<_> = t_vars.iter().chain(t_prime_vars.iter()).map(|v| v as &dyn Ast).collect();
+
+                let rel_fn = self.get_rel_fn(r_vl, &scope);
+                let r_of_t = rel_fn.apply(&t_vars_ast).as_int().unwrap();
+                let r_of_t_prime = rel_fn.apply(&t_prime_vars.iter().map(|v| v as &dyn Ast).collect_vec()).as_int().unwrap();
+                
+                let part1_body = r_of_t.le(&Int::from_i64(z3_ctx, 1));
+                let part1 = forall_const(z3_ctx, &t_vars_ast, &[], &part1_body);
+
+                let a_of_t: Vec<_> = attrs_expr.iter().map(|e| env_t.eval_rel_expr(e, schemas)).collect();
+                let a_of_t_prime: Vec<_> = attrs_expr.iter().map(|e| env_t_prime.eval_rel_expr(e, schemas)).collect();
+                
+                let a_eq_vec: Vec<_> = a_of_t.iter().zip(a_of_t_prime.iter()).map(|(v1, v2)| v1._eq(v2)).collect();
+                let a_eq = Bool::and(z3_ctx, &a_eq_vec.iter().collect_vec());
+                
+                let t_eq_vec: Vec<_> = t_vars.iter().zip(t_prime_vars.iter()).map(|(v1, v2)| v1._eq(v2)).collect();
+                let t_eq = Bool::and(z3_ctx, &t_eq_vec.iter().collect_vec());
+
+                let part2_premise = Bool::and(z3_ctx, &[
+                    &r_of_t.gt(&Int::from_i64(z3_ctx, 0)),
+                    &r_of_t_prime.gt(&Int::from_i64(z3_ctx, 0)),
+                    &a_eq,
+                ]);
+                let part2_body = part2_premise.implies(&t_eq);
+                let part2 = forall_const(z3_ctx, &all_t_vars_ast, &[], &part2_body);
+
+                Bool::and(z3_ctx, &[&part1, &part2])
+            }
+            relation::Constraint::NotNull { r: r_vl, a: attrs_expr } => {
+                let schema = &schemas[r_vl.0];
+                let scope: Vector<DataType> = schema.types.clone().into();
+                
+                let (env_t, t_vars) = self.extend_vars(&scope);
+                let t_vars_ast: Vec<_> = t_vars.iter().map(|v| v as &dyn Ast).collect();
+                
+                let rel_fn = self.get_rel_fn(r_vl, &scope);
+                let r_of_t = rel_fn.apply(&t_vars_ast).as_int().unwrap();
+                let premise = r_of_t.gt(&Int::from_i64(z3_ctx, 0));
+
+                let a_of_t: Vec<_> = attrs_expr.iter().map(|e| env_t.eval_rel_expr(e, schemas)).collect();
+                let conclusion_vec: Vec<_> = a_of_t.iter().map(|v| self.ctx.is_some(v)).collect();
+                let conclusion = Bool::and(z3_ctx, &conclusion_vec.iter().collect_vec());
+
+                let body = premise.implies(&conclusion);
+                forall_const(z3_ctx, &t_vars_ast, &[], &body)
+            }
+            relation::Constraint::RefAttrs { r1: r1_vl, a1: a1_expr, r2: r2_vl, a2: a2_expr } => {
+                let schema1 = &schemas[r1_vl.0];
+                let scope1: Vector<DataType> = schema1.types.clone().into();
+                let schema2 = &schemas[r2_vl.0];
+                let scope2: Vector<DataType> = schema2.types.clone().into();
+
+                let (env_t1, t1_vars) = self.extend_vars(&scope1);
+                let t1_vars_ast: Vec<_> = t1_vars.iter().map(|v| v as &dyn Ast).collect();
+                
+                let (env_t2, t2_vars) = self.extend_vars(&scope2);
+                
+                let rel1_fn = self.get_rel_fn(r1_vl, &scope1);
+                let r1_of_t1 = rel1_fn.apply(&t1_vars_ast).as_int().unwrap();
+                
+                let a1_of_t1: Vec<_> = a1_expr.iter().map(|e| env_t1.eval_rel_expr(e, schemas)).collect();
+                let a1_not_null_vec: Vec<_> = a1_of_t1.iter().map(|v| self.ctx.is_some(v)).collect();
+                let a1_not_null = Bool::and(z3_ctx, &a1_not_null_vec.iter().collect_vec());
+
+                let premise = Bool::and(z3_ctx, &[&r1_of_t1.gt(&Int::from_i64(z3_ctx, 0)), &a1_not_null]);
+
+                let rel2_fn = self.get_rel_fn(r2_vl, &scope2);
+                let r2_of_t2 = rel2_fn.apply(&t2_vars.iter().map(|v| v as &dyn Ast).collect_vec()).as_int().unwrap();
+
+                let a2_of_t2: Vec<_> = a2_expr.iter().map(|e| env_t2.eval_rel_expr(e, schemas)).collect();
+                let a2_not_null_vec: Vec<_> = a2_of_t2.iter().map(|v| self.ctx.is_some(v)).collect();
+                let a2_not_null = Bool::and(z3_ctx, &a2_not_null_vec.iter().collect_vec());
+                
+                let attrs_eq_vec: Vec<_> = a1_of_t1.iter().zip(a2_of_t2.iter()).map(|(v1, v2)| v1._eq(v2)).collect();
+                let attrs_eq = Bool::and(z3_ctx, &attrs_eq_vec.iter().collect_vec());
+                
+                let conclusion_body = Bool::and(z3_ctx, &[&r2_of_t2.gt(&Int::from_i64(z3_ctx, 0)), &a2_not_null, &attrs_eq]);
+                let conclusion = self.exists(&t2_vars, &conclusion_body);
+                
+                let body = premise.implies(&conclusion);
+                forall_const(z3_ctx, &t1_vars_ast, &[], &body)
+            }
+            // 미구현된 제약조건에 대한 기본 처리
+            _ => Bool::from_bool(z3_ctx, true),
+        }
+    }
 }
 
 impl<'c> Eval<&Logic, Bool<'c>> for &Z3Env<'c> {

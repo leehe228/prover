@@ -85,6 +85,13 @@ pub fn unify(Input { schemas, queries: (rel1, rel2), constraints, help }: Input)
 	let z3_ctx = &Context::new(&config);
 	let ctx = Rc::new(Ctx::new_with_stats(Solver::new(z3_ctx), stats));
 	let z3_env = Z3Env::empty(ctx.clone());
+
+	if !constraints.is_empty() {
+		let formula = z3_env.eval_constraints(&schemas, &constraints);
+		// Use RefCell for interior mutability to store the evaluated formula
+		ctx.constraints_formula.replace(Some(formula));
+	}
+
 	let eval_stb = |nom: normal::Relation| -> normal::Relation {
 		let env = &stable::Env(vector![], z3_env.clone());
 		let stb = env.eval(nom);
