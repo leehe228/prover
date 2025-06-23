@@ -25,6 +25,8 @@ pub struct Input {
 	schemas: Vec<Schema>,
 	pub queries: (relation::Relation, relation::Relation),
 	#[serde(default)]
+	pub constraints: Vec<relation::Constraint>,
+	#[serde(default)]
 	help: (String, String),
 }
 
@@ -45,7 +47,7 @@ pub struct Stats {
 	pub total_duration: Duration,
 }
 
-pub fn unify(Input { schemas, queries: (rel1, rel2), help }: Input) -> (bool, Stats) {
+pub fn unify(Input { schemas, queries: (rel1, rel2), constraints, help }: Input) -> (bool, Stats) {
 	let mut stats = Stats::default();
 	let subst = vector![];
 	let env = relation::Env(&schemas, &subst, 0);
