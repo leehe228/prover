@@ -88,6 +88,7 @@ pub struct Ctx<'c> {
 	pub solver: Solver<'c>,
 	pub stats: Rc<RefCell<Stats>>,
 	sorts: Sorts<'c>,
+	pub constraints_formula: Option<Bool<'c>>,
 }
 
 macro_rules! ctx_impl {
@@ -108,7 +109,7 @@ macro_rules! ctx_impl {
                     .finish();)*
 				$($(optional_op!(solver, $sort, $lsort, $olsort; $def $args));*);*;
 				let sorts = Sorts { $($lsort),* };
-                Self { solver, stats: Rc::new(RefCell::new(stats)), sorts }
+                Self { solver, stats: Rc::new(RefCell::new(stats)), sorts, constraints_formula: None }
             }
             pub fn new(solver: Solver<'c>) -> Self {
             	Self::new_with_stats(solver, Default::default())
