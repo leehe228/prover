@@ -222,6 +222,12 @@ pub fn stablize<'c>(
 	for a in solver.get_assertions() {
 		tmp_solver.assert(&a.translate(tmp_ctx));
 	}
+
+	let constraints_formula_guard = z3_env.ctx.constraints_formula.borrow();
+	if let Some(constraints) = &*constraints_formula_guard {
+		tmp_solver.assert(&constraints.translate(tmp_ctx));
+	}
+
 	let z3_asts = exprs.iter().map(|&e| z3_env.eval(e).translate(tmp_ctx)).collect_vec();
 	let z3_asts = z3_asts.iter().map(|e| e as &dyn Ast).collect_vec();
 	solver.pop(1);

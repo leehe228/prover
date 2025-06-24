@@ -88,7 +88,7 @@ pub fn unify(Input { schemas, queries: (rel1, rel2), constraints, help }: Input)
 
 	if !constraints.is_empty() {
 		let formula = z3_env.eval_constraints(&schemas, &constraints);
-		// Use RefCell for interior mutability to store the evaluated formula
+		log::info!("Global Constraints Formula:\n{}", formula);
 		ctx.constraints_formula.replace(Some(formula));
 	}
 
@@ -98,8 +98,14 @@ pub fn unify(Input { schemas, queries: (rel1, rel2), constraints, help }: Input)
 		nom_env.eval(stb)
 	};
 	let stb_start = Instant::now();
+	log::info!("Normal left:\n{}", rel1);
 	let rel1 = eval_stb(rel1);
+	log::info!("Stable left:\n{}", rel1); 
+
+	log::info!("Normal right:\n{}", rel2);
 	let rel2 = eval_stb(rel2);
+	log::info!("Stable right:\n{}", rel2);
+
 	ctx.stats.borrow_mut().stable_duration = stb_start.elapsed();
 	log::info!("Stable left:\n{}", rel1);
 	log::info!("Stable right:\n{}", rel2);
