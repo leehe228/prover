@@ -263,7 +263,7 @@ pub fn stablize<'c>(
 		SatResult::Sat => {
 			let groups = ids.into_iter().zip(exprs).collect_vec();
 			log::info!(
-				"Congruence groups: {}",
+				"# Stabilize Found Congruence Groups: {}",
 				groups.iter().map(|(g, e)| format!("[{}, {}]", g, e)).join(", ")
 			);
 			let env = &Env(subst.clone(), z3_env.clone());

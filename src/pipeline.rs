@@ -47,9 +47,41 @@ pub struct Stats {
 	pub total_duration: Duration,
 }
 
-pub fn unify(Input { schemas, queries: (rel1, rel2), constraints, help }: Input) -> (bool, Stats) {
+pub fn unify(Input { mut schemas, queries: (rel1, rel2), constraints, help }: Input) -> (bool, Stats) {
 	let mut stats = Stats::default();
 	let subst = vector![];
+
+	for constraint in &constraints {
+        use crate::pipeline::relation::Constraint;
+        use crate::pipeline::relation::Expr::Col;
+
+        match constraint {
+            Constraint::NotNull { r, a } => {
+                if let Some(schema) = schemas.get_mut(r.0) {
+                    for expr in a {
+                        if let Col { column, .. } = expr {
+                            if let Some(nullable) = schema.nullabilities.get_mut(column.0) {
+                                *nullable = false;
+                            }
+                        }
+                    }
+                }
+            }
+            Constraint::Unique { r, a } => {
+                if let Some(schema) = schemas.get_mut(r.0) {
+                    let key_set: std::collections::HashSet<usize> = a.iter().filter_map(|expr| {
+                        if let Col { column, .. } = expr { Some(column.0) } else { None }
+                    }).collect();
+                    if !key_set.is_empty() {
+                        schema.primary.push(key_set);
+                    }
+                }
+            }
+            // RefAttrs, RelEq 등 다른 제약조건에 대한 처리도 유사하게 추가 가능
+            _ => (),
+        }
+    }
+
 	let env = relation::Env(&schemas, &subst, 0);
 	log::info!("Schemas:\n{:?}", schemas);
 	log::info!("Input:\n{}\n{}", help.0, help.1);
@@ -98,17 +130,18 @@ pub fn unify(Input { schemas, queries: (rel1, rel2), constraints, help }: Input)
 		nom_env.eval(stb)
 	};
 	let stb_start = Instant::now();
-	log::info!("Normal left:\n{}", rel1);
-	let rel1 = eval_stb(rel1);
-	log::info!("Stable left:\n{}", rel1); 
 
-	log::info!("Normal right:\n{}", rel2);
+	log::info!("\n--- Left Query ---");
+	log::info!("# Before Stabilization (Normal Form):\n{}", rel1);
+	let rel1 = eval_stb(rel1);
+	log::info!("# After Stabilization (Stable Form):\n{}", rel1);
+
+	log::info!("\n--- Right Query ---");
+	log::info!("# Before Stabilization (Normal Form):\n{}", rel2);
 	let rel2 = eval_stb(rel2);
-	log::info!("Stable right:\n{}", rel2);
+	log::info!("# After Stabilization (Stable Form):\n{}", rel2);
 
 	ctx.stats.borrow_mut().stable_duration = stb_start.elapsed();
-	log::info!("Stable left:\n{}", rel1);
-	log::info!("Stable right:\n{}", rel2);
 	if rel1 == rel2 {
 		return (true, ctx.stats.borrow().clone());
 	}

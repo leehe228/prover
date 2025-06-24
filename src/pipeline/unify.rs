@@ -222,8 +222,10 @@ impl<'c> Unify<Inner> for UnifyEnv<'c> {
 				h_ops_equiv
 			}
 		};
-
-		log::info!("Premise: {}", premise);
+		
+		log::info!("\n# STEP 4: Final Verification");
+		log::info!("## Premise (h_ops_equiv AND constraints):\n{}", premise);
+		log::info!("## Equivalence Goal (query1 === query2):\n{}", equiv);
 		log::info!("Equivalence Goal: {}", equiv);
 		// log::info!("{}", h_ops_equiv);
 		let unify_start = Instant::now();
@@ -243,7 +245,7 @@ pub(crate) fn smt<'c>(solver: &'c z3::Solver, pred: Bool<'c>) -> (bool, bool) {
 		.replace(")or", ") false")
 		.replace("(* ", "(* 1 ")
 		.replace("(+ ", "(+ 0 ");
-	log::info!("SMT-LIB Query:\n{}", smt);
+	log::info!("## SMT-LIB Query (to be solved):\n{}", smt);
 	let smt = smt.strip_prefix("; \n(set-info :status )").unwrap_or(smt.as_str());
 	let res = crossbeam::atomic::AtomicCell::new(false);
 	let last = crossbeam::atomic::AtomicCell::new(false);

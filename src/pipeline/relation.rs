@@ -157,7 +157,10 @@ impl Eval<Relation, syntax::Relation> for Env<'_> {
 							});
 							pa.chain(once(pk))
 						});
-					UExpr::pred(key_constraints.product())
+					// squash 연산을 통해 PK의 고유성(multiplicity <= 1)을 보장하고 FD 제약조건을 AND 연산으로 결합
+					// UExpr::pred(key_constraints.product())
+					UExpr::squash(UExpr::Neu(Neutral(Head::Var(VL(t)), vars.clone())))
+						* UExpr::pred(key_constraints.product())
 				};
 				Lambda(scope.clone(), app * Mul(constraints.collect()) * Mul(conds.collect()))
 			},
@@ -518,7 +521,8 @@ pub enum Constraint {
     RefAttrs { r1: VL, a1: Vec<Expr>, r2: VL, a2: Vec<Expr> },
     AttrsEq { a1: Vec<Expr>, a2: Vec<Expr> },
     PredEq { p1: Box<Expr>, p2: Box<Expr> },
-    SubAttrs { a1: Vec<Expr>, a2: Vec<Expr> },
+	#[serde(rename = "subAttrs")]
+    SubAttr { a1: Vec<Expr>, a2: Vec<Expr> },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

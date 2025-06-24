@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter, Write};
 use std::ops::Range;
 use std::rc::Rc;
+use std::collections::BTreeMap;
 
 use anyhow::bail;
 use imbl::{vector, HashSet, Vector};
@@ -593,6 +594,42 @@ impl<'c> Z3Env<'c> {
         }
     }
 
+	/// Recursively collects all column expressions from a relation expression.
+    fn collect_cols<'a>(&self, e: &'a RelExpr, cols: &mut Vec<&'a RelExpr>) {
+        match e {
+            RelExpr::Col { .. } => cols.push(e),
+            RelExpr::Op { args, .. } => {
+                for arg in args {
+                    self.collect_cols(arg, cols);
+                }
+            }
+        }
+    }
+
+    /// Determines the scope (schema) of a tuple `t` by inspecting all column references in a set of expressions.
+    fn determine_scope(&self, exprs: &[&RelExpr]) -> Vector<DataType> {
+        let mut type_map = BTreeMap::new();
+        let mut all_cols = Vec::new();
+        for expr in exprs {
+            self.collect_cols(expr, &mut all_cols);
+        }
+        
+        for col_expr in all_cols {
+            if let RelExpr::Col { column, ty } = col_expr {
+                type_map.entry(column.0).or_insert_with(|| ty.clone());
+            }
+        }
+
+        let max_idx = type_map.keys().max().copied().unwrap_or(0);
+        let mut scope = Vec::with_capacity(max_idx + 1);
+        for i in 0..=max_idx {
+            // Use Integer as a default for any unspecified columns in the middle.
+            let ty = type_map.get(&i).cloned().unwrap_or(DataType::Integer);
+            scope.push(ty);
+        }
+        scope.into()
+    }
+
     pub fn eval_constraints(&self, schemas: &[Schema], constraints: &Vec<relation::Constraint>) -> Bool<'c> {
         let constraint_formulas: Vec<_> = constraints.iter()
             .map(|c| self.eval_constraint(schemas, c))
@@ -718,8 +755,51 @@ impl<'c> Z3Env<'c> {
                 let body = premise.implies(&conclusion);
                 forall_const(z3_ctx, &t1_vars_ast, &[], &body)
             }
-            // 미구현된 제약조건에 대한 기본 처리
-            _ => Bool::from_bool(z3_ctx, true),
+            relation::Constraint::AttrsEq { a1, a2 } => {
+				let scope = self.determine_scope(&a1.iter().chain(a2.iter()).collect_vec());
+                let (env_t, t_vars) = self.extend_vars(&scope);
+                let t_vars_ast: Vec<_> = t_vars.iter().map(|v| v as &dyn Ast).collect();
+ 
+                let a1_of_t: Vec<_> = a1.iter().map(|e| env_t.eval_rel_expr(e, schemas)).collect();
+                let a2_of_t: Vec<_> = a2.iter().map(|e| env_t.eval_rel_expr(e, schemas)).collect();
+ 
+                let body_vec: Vec<_> = a1_of_t.iter().zip(a2_of_t.iter()).map(|(v1, v2)| v1._eq(v2)).collect();
+                let body = Bool::and(z3_ctx, &body_vec.iter().collect_vec());
+ 
+                forall_const(z3_ctx, &t_vars_ast, &[], &body)
+			}
+			relation::Constraint::PredEq { p1, p2 } => {
+				let scope = self.determine_scope(&[p1.as_ref(), p2.as_ref()]);
+                let (env_t, t_vars) = self.extend_vars(&scope);
+                let t_vars_ast: Vec<_> = t_vars.iter().map(|v| v as &dyn Ast).collect();
+ 
+                let p1_z3 = env_t.eval_rel_expr(p1, schemas);
+                let p2_z3 = env_t.eval_rel_expr(p2, schemas);
+ 
+                let body = p1_z3._eq(&p2_z3);
+                forall_const(z3_ctx, &t_vars_ast, &[], &body)
+			}
+			relation::Constraint::SubAttr { a1, a2 } => {
+				// ∀t. a₁(t) = a₁(a₂(t))
+                let scope = self.determine_scope(&a1.iter().chain(a2.iter()).collect_vec());
+                let (env_t, _) = self.extend_vars(&scope);
+ 
+                // LHS: a₁(t)
+                let a1_of_t: Vec<_> = a1.iter().map(|e| env_t.eval_rel_expr(e, schemas)).collect();
+ 
+                // Intermediate: a₂(t)
+                let a2_of_t: Vector<_> = a2.iter().map(|e| env_t.eval_rel_expr(e, schemas)).collect();
+ 
+                // RHS: a₁(a₂(t))
+                let env_intermediate = self.extend_vals(&a2_of_t);
+                let a1_of_a2_of_t: Vec<_> = a1.iter().map(|e| env_intermediate.eval_rel_expr(e, schemas)).collect();
+ 
+                let body_vec: Vec<_> = a1_of_t.iter().zip(a1_of_a2_of_t.iter()).map(|(v1, v2)| v1._eq(v2)).collect();
+                let body = Bool::and(z3_ctx, &body_vec.iter().collect_vec());
+ 
+                let all_t_vars: Vec<_> = env_t.subst.iter().map(|v| v as &dyn Ast).collect();
+                forall_const(z3_ctx, &all_t_vars, &[], &body)
+			}
         }
     }
 }
