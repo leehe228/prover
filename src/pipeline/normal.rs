@@ -426,6 +426,7 @@ impl<'c> Z3Env<'c> {
 
 	pub fn extend_vars(&self, scope: &Vector<DataType>) -> (Z3Env<'c>, Vector<Dynamic<'c>>) {
 		let vars = scope.into_iter().map(|ty| self.ctx.var(ty, "v")).collect();
+		log::info!("[Debug] Extending vars with scope: {:?}, generated: {:?}", scope, vars);
 		(Z3Env { subst: &self.subst + &vars, ..self.clone() }, vars)
 	}
 
@@ -629,6 +630,8 @@ impl<'c> Z3Env<'c> {
             let ty = type_map.get(&i).cloned().unwrap_or(DataType::Integer);
             scope.push(ty);
         }
+
+		log::info!("[Debug] Determined scope for '∀t': {:?}", scope);
         scope.into()
     }
 
@@ -758,16 +761,23 @@ impl<'c> Z3Env<'c> {
                 forall_const(z3_ctx, &t1_vars_ast, &[], &body)
             }
             relation::Constraint::AttrsEq { a1, a2 } => {
-                let scope = self.determine_scope(&a1.iter().chain(a2.iter()).collect_vec());
+				// 1. 제약 조건에 사용된 모든 열을 기반으로 가상 튜플 `t`의 타입을 결정
+                let all_exprs: Vec<_> = a1.iter().chain(a2.iter()).collect();
+                let scope = self.determine_scope(&all_exprs);
+                
+                // 2. `t`에 대한 Z3 변수들을 생성
                 let (env_t, t_vars) = self.extend_vars(&scope);
                 let t_vars_ast: Vec<_> = t_vars.iter().map(|v| v as &dyn Ast).collect();
 
+                // 3. `t`를 입력으로 하여 a1(t)와 a2(t)의 값을 평가
                 let a1_of_t: Vec<_> = a1.iter().map(|e| env_t.eval_rel_expr(e, schemas)).collect();
                 let a2_of_t: Vec<_> = a2.iter().map(|e| env_t.eval_rel_expr(e, schemas)).collect();
 
+                // 4. a1(t) = a2(t) 공식을 생성
                 let body_vec: Vec<_> = a1_of_t.iter().zip(a2_of_t.iter()).map(|(v1, v2)| v1._eq(v2)).collect();
                 let body = Bool::and(z3_ctx, &body_vec.iter().collect_vec());
 
+                // 5. 최종적으로 `∀t. a₁(t) = a₂(t)` 공식을 반환
                 forall_const(z3_ctx, &t_vars_ast, &[], &body)
             }
             relation::Constraint::PredEq { p1, p2 } => {

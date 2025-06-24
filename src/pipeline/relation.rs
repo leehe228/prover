@@ -134,7 +134,7 @@ impl Eval<Relation, syntax::Relation> for Env<'_> {
 							UExpr::one()
 						}
 					});
-				let app = if schema.primary.is_empty() {
+				let body = if schema.primary.is_empty() {
 					let app = UExpr::Neu(Neutral(Head::Var(VL(t)), vars.clone()));
 					app.clone() * UExpr::squash(app)
 				} else {
@@ -157,12 +157,9 @@ impl Eval<Relation, syntax::Relation> for Env<'_> {
 							});
 							pa.chain(once(pk))
 						});
-					// squash 연산을 통해 PK의 고유성(multiplicity <= 1)을 보장하고 FD 제약조건을 AND 연산으로 결합
-					// UExpr::pred(key_constraints.product())
-					UExpr::squash(UExpr::Neu(Neutral(Head::Var(VL(t)), vars.clone())))
-						* UExpr::pred(key_constraints.product())
+					UExpr::squash(UExpr::Neu(Neutral(Head::Var(VL(t)), vars.clone()))) * UExpr::pred(key_constraints.product())
 				};
-				Lambda(scope.clone(), app * Mul(constraints.collect()) * Mul(conds.collect()))
+				Lambda(scope.clone(), body * Mul(constraints.collect()) * Mul(conds.collect()))
 			},
 			// Filter R(x, y) by P[x, y]
 			// λ x, y. [P[x, y]] × R(x, y)

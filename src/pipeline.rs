@@ -5,9 +5,10 @@ use imbl::vector;
 use serde::{Deserialize, Serialize};
 use z3::{Config, Context, Solver};
 
-use crate::pipeline::normal::Z3Env;
+use crate::pipeline::normal::{Relation, Z3Env};
 use crate::pipeline::shared::{Ctx, Eval, Schema};
 use crate::pipeline::unify::{Unify, UnifyEnv};
+use crate::pipeline::relation::{Relation as URelation, Expr};
 
 pub mod normal;
 mod null;
@@ -47,11 +48,11 @@ pub struct Stats {
 	pub total_duration: Duration,
 }
 
-pub fn unify(Input { mut schemas, queries: (rel1, rel2), constraints, help }: Input) -> (bool, Stats) {
+pub fn unify(Input { schemas, queries: (rel1, rel2), constraints, help }: Input) -> (bool, Stats) {
 	let mut stats = Stats::default();
 	let subst = vector![];
 
-	for constraint in &constraints {
+	/* for constraint in &constraints {
         use crate::pipeline::relation::Constraint;
         use crate::pipeline::relation::Expr::Col;
 
@@ -77,10 +78,25 @@ pub fn unify(Input { mut schemas, queries: (rel1, rel2), constraints, help }: In
                     }
                 }
             }
-            // RefAttrs, RelEq 등 다른 제약조건에 대한 처리도 유사하게 추가 가능
+            Constraint::RefAttrs { r1, a1, r2, a2 } => {
+				if let Some(schema) = schemas.get_mut(r1.0) {
+                    // a1 IN (SELECT a2 FROM r2) 형태의 guaranteed predicate를 생성합니다.
+                    let subquery = URelation::Project {
+                        columns: a2.clone(),
+                        source: Box::new(URelation::Scan(*r2)),
+                    };
+                    let in_expr = Expr::Op {
+                        op: "IN".to_string(),
+                        args: a1.clone(),
+                        ty: crate::pipeline::shared::DataType::Boolean,
+                        rel: Some(Box::new(subquery)),
+                    };
+                    schema.guaranteed.push(in_expr);
+                }
+			}
             _ => (),
         }
-    }
+    } */
 
 	let env = relation::Env(&schemas, &subst, 0);
 	log::info!("Schemas:\n{:?}", schemas);
