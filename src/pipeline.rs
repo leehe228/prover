@@ -9,7 +9,7 @@ use z3::{Config, Context, Solver};
 use crate::pipeline::normal::{Relation, Z3Env};
 use crate::pipeline::shared::{Ctx, Eval, Schema};
 use crate::pipeline::unify::{Unify, UnifyEnv};
-use crate::pipeline::relation::{Relation as URelation, Expr};
+use crate::pipeline::relation::{Relation as URelation, Expr, JoinKind, Constraint};
 
 pub mod normal;
 mod null;
@@ -53,6 +53,9 @@ pub fn unify(Input { mut schemas, queries: (mut rel1, mut rel2), constraints, he
 	let mut stats = Stats::default();
 	let subst = vector![];
 	let mut alias_map: HashMap<usize, usize> = HashMap::new();
+
+	rewrite_joins_for_refattrs(&mut rel1, &constraints, &schemas);
+	rewrite_joins_for_refattrs(&mut rel2, &constraints, &schemas);
 
 	for constraint in &constraints {
 		use crate::pipeline::relation::{Constraint, Expr, Relation as RelationEnum};
@@ -237,4 +240,75 @@ fn rewrite_expr_scans(expr: &mut Expr, alias_map: &HashMap<usize, usize>) {
         }
         rewrite_scans(sub_rel, alias_map);
     }
+}
+
+fn rewrite_joins_for_refattrs(rel: &mut URelation, constraints: &[Constraint], schemas: &[Schema]) {
+    if let URelation::Join { left, right, kind, condition } = rel {
+        // 재귀적으로 하위 조인부터 처리
+        rewrite_joins_for_refattrs(left, &constraints, &schemas);
+        rewrite_joins_for_refattrs(right, &constraints, &schemas);
+
+        // 현재 조인이 LEFT JOIN인 경우에만 INNER JOIN으로의 변환을 시도
+        if *kind == JoinKind::Left {
+			let left_width = left.scope(schemas).len();
+            for constraint in constraints {
+                if let Constraint::RefAttrs { r1, a1, r2, a2 } = constraint {
+                    // 이 조인이 해당 RefAttrs 제약조건과 일치하는지 확인
+                    if match_ref_attrs(left, right, condition, *r1, a1, *r2, a2, left_width) {
+                        *kind = JoinKind::Inner;
+                        log::info!("Rewrote LEFT JOIN to INNER JOIN based on RefAttrs");
+                        break; // 변환이 적용되었으므로 더 이상 확인할 필요 없음
+                    }
+                }
+            }
+        }
+    } else {
+        // 다른 타입의 릴레이션에 대해서도 재귀적으로 순회
+        match rel {
+            URelation::Filter { source, .. } => rewrite_joins_for_refattrs(source, constraints, schemas),
+            URelation::Project { source, .. } => rewrite_joins_for_refattrs(source, constraints, schemas),
+            URelation::Union(rels) | URelation::Intersect(rels) => {
+                for r in rels { rewrite_joins_for_refattrs(r, constraints, schemas); }
+            },
+            URelation::Except(l, r) => {
+                rewrite_joins_for_refattrs(l, constraints, schemas);
+                rewrite_joins_for_refattrs(r, constraints, schemas);
+            },
+            URelation::Distinct(s) | URelation::Sort { source: s, .. } | URelation::Aggregate { source: s, .. } | URelation::Group { source: s, .. } => {
+                rewrite_joins_for_refattrs(s, constraints, schemas);
+            },
+            _ => {}
+        }
+    }
+}
+
+fn match_ref_attrs(
+    left: &URelation,
+    right: &URelation,
+    condition: &Expr,
+    r1: crate::pipeline::shared::VL,
+    a1: &[Expr],
+    r2: crate::pipeline::shared::VL,
+    a2: &[Expr],
+    left_width: usize,
+) -> bool {
+    let rels_match = matches!((left, right), (URelation::Scan(vl1), URelation::Scan(vl2)) if vl1.0 == r1.0 && vl2.0 == r2.0);
+    if !rels_match { return false; }
+
+    if let Expr::Op { op, args, .. } = condition {
+        if op == "=" && args.len() == 2 {
+            if let (Expr::Col { column: c1, .. }, Expr::Col { column: c2, .. }) = (&args[0], &args[1]) {
+                let const_c1 = a1.get(0).and_then(|e| if let Expr::Col{column, ..} = e {Some(column.0)} else {None}).unwrap_or(usize::MAX);
+                let const_c2 = a2.get(0).and_then(|e| if let Expr::Col{column, ..} = e {Some(column.0)} else {None}).unwrap_or(usize::MAX);
+
+                // Case 1: cond(c1, c2) == constr(a1, a2) -> c1은 left, c2는 right
+                let case1 = c1.0 == const_c1 && c2.0 == left_width + const_c2;
+                // Case 2: cond(c2, c1) == constr(a1, a2) -> c2는 left, c1는 right
+                let case2 = c2.0 == const_c1 && c1.0 == left_width + const_c2;
+
+                return case1 || case2;
+            }
+        }
+    }
+    false
 }

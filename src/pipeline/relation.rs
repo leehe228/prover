@@ -71,7 +71,7 @@ pub enum Relation {
 }
 
 impl Relation {
-	fn scope(&self, schemas: &[Schema]) -> Vector<DataType> {
+	pub fn scope(&self, schemas: &[Schema]) -> Vector<DataType> {
 		use JoinKind::*;
 		use Relation::*;
 		match self {
