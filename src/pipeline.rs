@@ -195,8 +195,11 @@ fn rewrite_scans(rel: &mut URelation, alias_map: &HashMap<usize, usize>) {
                 vl.0 = target_vl;
             }
         }
-        URelation::Filter { source, .. } => rewrite_scans(source, alias_map),
-        URelation::Project { columns, source, } => {
+        URelation::Filter { source, condition } => {
+			rewrite_expr_scans(condition, alias_map);
+			rewrite_scans(source, alias_map);
+		}
+		URelation::Project { columns, source } => {
 			for col in columns {
 				rewrite_expr_scans(col, alias_map);
 			}
