@@ -1,6 +1,6 @@
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use imbl::vector;
 use serde::{Deserialize, Serialize};
@@ -52,11 +52,13 @@ pub struct Stats {
 pub fn unify(Input { mut schemas, queries: (mut rel1, mut rel2), constraints, help }: Input) -> (bool, Stats) {
 	let mut stats = Stats::default();
 	let subst = vector![];
-	let mut alias_map: HashMap<usize, usize> = HashMap::new();
+	let mut alias_map: HashMap<usize, usize> = HashMap::new(); // for RelEq
+	let mut attrs_map: HashMap<Expr, Expr> = HashMap::new(); // for AttrsEq
 
 	rewrite_joins_for_refattrs(&mut rel1, &constraints, &schemas);
 	rewrite_joins_for_refattrs(&mut rel2, &constraints, &schemas);
 
+	// 1단계: 제약 조건을 사용하여 쿼리 재작성 계획 수립 및 스키마 강화
 	for constraint in &constraints {
 		use crate::pipeline::relation::{Constraint, Expr, Relation as RelationEnum};
 		use crate::pipeline::relation::Expr::Col;
@@ -110,15 +112,28 @@ pub fn unify(Input { mut schemas, queries: (mut rel1, mut rel2), constraints, he
 					alias_map.insert(r1.0, r2.0);
 				}
 			}
+			Constraint::AttrsEq { a1, a2 } => {
+               for (expr1, expr2) in a1.iter().zip(a2.iter()) {
+                   attrs_map.insert(expr2.clone(), expr1.clone());
+               }
+			}
 			_ => (),
 		}
 	}
 
-	// RelEq 쿼리 재작성
+	// 2단계: 수립된 계획에 따라 쿼리 재작성 실행
 	if !alias_map.is_empty() {
 		rewrite_scans(&mut rel1, &alias_map);
 		rewrite_scans(&mut rel2, &alias_map);
 	}
+
+	if !attrs_map.is_empty() {
+		rewrite_exprs(&mut rel1, &attrs_map);
+		rewrite_exprs(&mut rel2, &attrs_map);
+	}
+
+	rewrite_joins_for_refattrs(&mut rel1, &constraints, &schemas);
+	rewrite_joins_for_refattrs(&mut rel2, &constraints, &schemas);
 
 	let env = relation::Env(&schemas, &subst, 0);
 	log::info!("Schemas:\n{:?}", schemas);
@@ -311,4 +326,78 @@ fn match_ref_attrs(
         }
     }
     false
+}
+
+// [수정] AttrsEq를 위한 재귀적 표현식 재작성 함수
+fn rewrite_exprs(rel: &mut URelation, attrs_map: &HashMap<Expr, Expr>) {
+    fn rewrite_single_expr(expr: &mut Expr, attrs_map: &HashMap<Expr, Expr>) {
+        if let Some(target_expr) = attrs_map.get(expr) {
+            *expr = target_expr.clone();
+            return;
+        }
+        match expr {
+            Expr::Op { args, rel, .. } => {
+                for arg in args {
+                    rewrite_single_expr(arg, attrs_map);
+                }
+                if let Some(sub_rel) = rel {
+                    rewrite_exprs(sub_rel, attrs_map);
+                }
+            }
+            Expr::Col { .. } => {}
+        }
+    }
+
+    match rel {
+        URelation::Filter { condition, source } => {
+            rewrite_single_expr(condition, attrs_map);
+            rewrite_exprs(source, attrs_map);
+        }
+        URelation::Project { columns, source } => {
+            for col in columns {
+                rewrite_single_expr(col, attrs_map);
+            }
+            rewrite_exprs(source, attrs_map);
+        }
+        URelation::Join { left, right, condition, .. } => {
+            rewrite_exprs(left, attrs_map);
+            rewrite_exprs(right, attrs_map);
+            rewrite_single_expr(condition, attrs_map);
+        }
+        URelation::Correlate { left, right, .. } => {
+            rewrite_exprs(left, attrs_map);
+            rewrite_exprs(right, attrs_map);
+        }
+        URelation::Union(rels) | URelation::Intersect(rels) => {
+            for r in rels {
+                rewrite_exprs(r, attrs_map);
+            }
+        }
+        URelation::Except(left, right) => {
+            rewrite_exprs(left, attrs_map);
+            rewrite_exprs(right, attrs_map);
+        }
+        URelation::Distinct(source) => rewrite_exprs(source, attrs_map),
+        URelation::Sort { source, .. } => rewrite_exprs(source, attrs_map),
+        URelation::Aggregate { columns, source } => {
+            for agg_call in columns {
+                for arg in &mut agg_call.args {
+                    rewrite_single_expr(arg, attrs_map);
+                }
+            }
+            rewrite_exprs(source, attrs_map);
+        }
+        URelation::Group { keys, columns, source } => {
+            for key in keys {
+                rewrite_single_expr(key, attrs_map);
+            }
+            for agg_call in columns {
+                for arg in &mut agg_call.args {
+                    rewrite_single_expr(arg, attrs_map);
+                }
+            }
+            rewrite_exprs(source, attrs_map);
+        }
+        _ => (),
+    }
 }

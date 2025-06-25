@@ -17,7 +17,7 @@ fn vars(level: usize, types: Vector<DataType>) -> Vector<syntax::Expr> {
 	types.into_iter().enumerate().map(|(i, ty)| syntax::Expr::Var(VL(level + i), ty)).collect()
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Relation {
 	Singleton,
@@ -447,7 +447,7 @@ impl Eval<Relation, syntax::Relation> for Env<'_> {
 	}
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum JoinKind {
 	Inner,
@@ -458,13 +458,13 @@ pub enum JoinKind {
 	Anti,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AggCall {
 	#[serde(alias = "operator")]
 	op: String,
 	#[serde(alias = "operand")]
-	args: Vec<Expr>,
+	pub args: Vec<Expr>,
 	#[serde(default = "default_distinct")]
 	distinct: bool,
 	#[serde(default = "default_ignore_nulls")]
@@ -522,7 +522,7 @@ pub enum Constraint {
     SubAttr { a1: Vec<Expr>, a2: Vec<Expr> },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(untagged)]
 pub enum Expr {
