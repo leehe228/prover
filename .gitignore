@@ -11,3 +11,4 @@ target/
 *.res
 
 examples/
+make_md.py
