@@ -2,7 +2,7 @@ use std::iter::once;
 use std::ops::{Mul, Not};
 
 use imbl::{vector, Vector};
-use itertools::{Either, Itertools};
+use itertools::{Either, Itertools, iproduct};
 use serde::{Deserialize, Serialize};
 
 use super::syntax::Aggr;

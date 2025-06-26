@@ -10,6 +10,7 @@ use crate::pipeline::normal::{Relation, Z3Env};
 use crate::pipeline::shared::{Ctx, Eval, Schema};
 use crate::pipeline::unify::{Unify, UnifyEnv};
 use crate::pipeline::relation::{Relation as URelation, Expr, JoinKind, Constraint};
+use crate::pipeline::enumerator::ConstraintEnumerator;
 
 pub mod normal;
 mod null;
@@ -21,6 +22,7 @@ pub mod syntax;
 #[cfg(test)]
 mod tests;
 pub mod unify;
+pub mod enumerator;
 
 #[derive(Debug, Default)]
 pub struct QueryInfo {
@@ -30,6 +32,8 @@ pub struct QueryInfo {
     pub attributes: HashSet<(usize, usize)>,
     /// 쿼리에서 사용된 미해석 술어(UDF)의 Set
     pub predicates: HashSet<String>,
+    /// 쿼리에서 사용된 미해석 함수(UDF)의 Set (반환 타입: Non-Boolean)
+    pub functions: HashSet<String>,
     /// 쿼리에서 사용된 집계 함수(Aggregation)의 Set
     pub aggregates: HashSet<String>,
 }
@@ -40,6 +44,7 @@ impl QueryInfo {
         self.relations.extend(other.relations);
         self.attributes.extend(other.attributes);
         self.predicates.extend(other.predicates);
+        self.functions.extend(other.functions);
         self.aggregates.extend(other.aggregates);
         self
     }
@@ -93,71 +98,92 @@ pub fn unify(Input { mut schemas, queries: (mut rel1, mut rel2), constraints, he
 	let analysis_info = analyze_queries(& (rel1.clone(), rel2.clone()), &schemas);
     log::info!("[Analysis] Detected Info: {:?}", analysis_info);
 
-	// 1단계: 제약 조건을 사용하여 쿼리 재작성 계획 수립 및 스키마 강화
-	for constraint in &constraints {
-		use crate::pipeline::relation::{Constraint, Expr, Relation as RelationEnum};
-		use crate::pipeline::relation::Expr::Col;
+    // 1단계: 제약 조건을 분석하여 쿼리 재작성 계획 수립 및 스키마 강화
+    // 입력으로 constraints가 주어지지 않은 경우에만 열거 로직을 실행
+    // let constraints_to_verify = if constraints.is_empty() {
+    //     let enumerator = ConstraintEnumerator::new();
+    //     let enumerated_constraints = enumerator.enumerate(&analysis_info, &schemas);
+    //     log::info!("[Enumeration] Generated {} constraint candidates.", enumerated_constraints.len());
+    //     for (i, constraint) in enumerated_constraints.iter().enumerate() {
+    //         log::info!("[Candidate {}] {:?}", i + 1, constraint);
+    //     }
+    //     enumerated_constraints
+    // } else {
+    //     constraints
+    // };
 
-		match constraint {
-			Constraint::NotNull { r, a } => {
-				if let Some(schema) = schemas.get_mut(r.0) {
-					for expr in a {
-						if let Col { column, .. } = expr {
-							if let Some(nullable) = schema.nullabilities.get_mut(column.0) {
-								*nullable = false;
-							}
-						}
-					}
-				}
-			}
-			Constraint::Unique { r, a } => {
-				if let Some(schema) = schemas.get_mut(r.0) {
-					let key_set: std::collections::HashSet<usize> = a.iter().filter_map(|expr| {
-						if let Col { column, .. } = expr { Some(column.0) } else { None }
-					}).collect();
-					if !key_set.is_empty() {
-						if !schema.primary.contains(&key_set) {
-							schema.primary.push(key_set);
-						}
-					}
-				}
-			}
-			Constraint::RefAttrs { r1, a1, r2, a2 } => {
-				if let Some(schema) = schemas.get_mut(r1.0) {
-					// a1 IN (SELECT a2 FROM r2) 형태의 guaranteed predicate를 생성
-					let subquery = RelationEnum::Project {
-						columns: a2.clone(),
-						source: Box::new(RelationEnum::Scan(*r2)),
-					};
-					let in_expr = Expr::Op {
-						op: "IN".to_string(),
-						args: a1.clone(),
-						ty: crate::pipeline::shared::DataType::Boolean,
-						rel: Some(Box::new(subquery)),
-					};
-					schema.guaranteed.push(in_expr);
-				}
-			}
-			// AttrsEq, PredEq, SubAttrs는 SMT Axiom으로 처리됨 (사전 구조 변경 필요 X)
-			Constraint::RelEq { r1, r2 } => {
-				// r2를 보면 r1으로 취급하도록 alias map에 기록 (큰 인덱스 -> 작은 인덱스)
-				if r1.0 < r2.0 {
-					alias_map.insert(r2.0, r1.0);
-				} else {
-					alias_map.insert(r1.0, r2.0);
-				}
-			}
-			Constraint::AttrsEq { a1, a2 } => {
+    // 현재 enumerate한 constraints는 디버깅용으로 로그 출력만 함 (실제 사용은 아직 X)
+    let enumerator = ConstraintEnumerator::new();
+    let enumerated_constraints = enumerator.enumerate(&analysis_info, &schemas);
+    log::info!("[Enumeration] Generated {} constraint candidates.", enumerated_constraints.len());
+    for (i, constraint) in enumerated_constraints.iter().enumerate() {
+        log::info!("[Candidate {}] {:?}", i + 1, constraint);
+    }
+    // 실제 적용은 받은 constraints 사용
+    let constraints_to_verify = constraints;
+
+	// 1단계: 제약 조건을 사용하여 쿼리 재작성 계획 수립 및 스키마 강화
+	for constraint in &constraints_to_verify {
+		use crate::pipeline::relation::Expr::Col;
+        use crate::pipeline::relation::Relation as RelationEnum;
+
+        match constraint {
+            Constraint::NotNull { r, a } => {
+                if let Some(schema) = schemas.get_mut(r.0) {
+                    for expr in a {
+                        if let Col { column, .. } = expr {
+                            if let Some(nullable) = schema.nullabilities.get_mut(column.0) {
+                                *nullable = false;
+                            }
+                        }
+                    }
+                }
+            }
+            Constraint::Unique { r, a } => {
+                if let Some(schema) = schemas.get_mut(r.0) {
+                    let key_set: std::collections::HashSet<usize> = a.iter().filter_map(|expr| {
+                        if let Col { column, .. } = expr { Some(column.0) } else { None }
+                    }).collect();
+                    if !key_set.is_empty() {
+                        if !schema.primary.contains(&key_set) {
+                            schema.primary.push(key_set);
+                        }
+                    }
+                }
+            }
+            Constraint::RefAttrs { r1, a1, r2, a2 } => {
+                if let Some(schema) = schemas.get_mut(r1.0) {
+                    let subquery = RelationEnum::Project {
+                        columns: a2.clone(),
+                        source: Box::new(RelationEnum::Scan(*r2)),
+                    };
+                    let in_expr = Expr::Op {
+                        op: "IN".to_string(),
+                        args: a1.clone(),
+                        ty: crate::pipeline::shared::DataType::Boolean,
+                        rel: Some(Box::new(subquery)),
+                    };
+                    schema.guaranteed.push(in_expr);
+                }
+            }
+            Constraint::RelEq { r1, r2 } => {
+                if r1.0 < r2.0 {
+                    alias_map.insert(r2.0, r1.0);
+                } else {
+                    alias_map.insert(r1.0, r2.0);
+                }
+            }
+            Constraint::AttrsEq { a1, a2 } => {
                for (expr1, expr2) in a1.iter().zip(a2.iter()) {
                    attrs_map.insert(expr2.clone(), expr1.clone());
                }
-			}
-			_ => (),
-		}
+            }
+            _ => (),
+        }
 	}
 
-	rewrite_joins_for_refattrs(&mut rel1, &constraints, &schemas);
-	rewrite_joins_for_refattrs(&mut rel2, &constraints, &schemas);
+	rewrite_joins_for_refattrs(&mut rel1, &constraints_to_verify, &schemas);
+	rewrite_joins_for_refattrs(&mut rel2, &constraints_to_verify, &schemas);
 
 	// 2단계: 수립된 계획에 따라 쿼리 재작성 실행
 	if !alias_map.is_empty() {
@@ -206,8 +232,8 @@ pub fn unify(Input { mut schemas, queries: (mut rel1, mut rel2), constraints, he
 	let ctx = Rc::new(Ctx::new_with_stats(Solver::new(z3_ctx), stats));
 	let z3_env = Z3Env::empty(ctx.clone());
 
-	if !constraints.is_empty() {
-		let formula = z3_env.eval_constraints(&schemas, &constraints);
+	if !constraints_to_verify.is_empty() {
+		let formula = z3_env.eval_constraints(&schemas, &constraints_to_verify);
 		log::info!("Global Constraints Formula:\n{}", formula);
 		ctx.constraints_formula.replace(Some(formula));
 	}
@@ -521,20 +547,25 @@ fn analyze_expr(expr: &Expr, schemas: &[Schema], info: &mut QueryInfo, current_s
                 offset += arity;
             }
         }
-        Expr::Op { op, args, rel, .. } => {
+        Expr::Op { op, args, ty, rel, .. } => {
             // 숫자 리터럴인지 확인하는 로직 추가
             let is_numeric_literal = op.parse::<i64>().is_ok() || op.parse::<f64>().is_ok();
+            let is_standard_op = relation::num_op(op) || relation::num_cmp(op) || matches!(op.as_str(), "IN" | "AND" | "OR" | "NOT" | "IS NULL" | "IS NOT NULL");
             
-            // SQL 표준 연산자 및 숫자 리터럴이 아닌 경우 미해석 술어(UDF)로 간주
-            if !relation::num_op(op) && !relation::num_cmp(op) && !is_numeric_literal && op != "IN" && op != "AND" && op != "OR" && op != "NOT" {
-                info.predicates.insert(op.clone());
+            if !is_numeric_literal && !is_standard_op {
+                // 반환 타입에 따라 술어와 함수를 구분하여 저장
+                if *ty == crate::pipeline::shared::DataType::Boolean {
+                    info.predicates.insert(op.clone());
+                } else {
+                    info.functions.insert(op.clone());
+                }
             }
 
             for arg in args {
                 analyze_expr(arg, schemas, info, current_scope);
             }
             if let Some(sub_rel) = rel {
-                analyze_relation(sub_rel, schemas, info, &mut Vec::new()); // 서브쿼리는 독립적인 스코프
+                analyze_relation(sub_rel, schemas, info, &mut Vec::new());
             }
         }
     }
