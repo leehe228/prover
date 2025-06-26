@@ -109,7 +109,7 @@ pub fn min_subst<'c>(
 		HashSet::unions(vars.iter().map(|&v| saturate(v, deps_map)))
 	}
 
-	let (exprs, mut var_subst) = var_groups
+	let (exprs, mut var_subst): (Vec<_>, Vector<_>) = var_groups
 		.zip(scope.clone())
 		.map(|((v, es), ty)| {
 			keys.remove(&v);
@@ -136,7 +136,7 @@ pub fn min_subst<'c>(
 		})
 		.unzip();
 	// Ensures v is mapped to some Expr
-	fn prune<'c>(
+	/* fn prune<'c>(
 		v: VL,
 		deps_map: &mut BTreeMap<VL, HashSet<VL>>,
 		var_subst: &mut Vector<Option<Expr<'c>>>,
@@ -148,11 +148,47 @@ pub fn min_subst<'c>(
 			let i = v.0 - env.0.len();
 			var_subst[i] = Some((&env.append(var_subst.clone())).eval(exprs[i].clone()));
 		};
-	}
+	} 
 
 	while let Some((&v, _)) = deps_map.first_key_value() {
 		prune(v, &mut deps_map, &mut var_subst, &exprs, env);
+	} */
+
+	let mut processing_stack: Vec<VL> = deps_map.keys().cloned().collect();
+	let mut finished: HashSet<VL> = HashSet::new();
+
+	const ITERATION_LIMIT: usize = 1_000_000;
+	let mut iteration_count = 0;
+
+	while let Some(v) = processing_stack.pop() {
+		if iteration_count > ITERATION_LIMIT {
+            log::warn!("[Timeout] Iteration limit exceeded in min_subst dependency resolution.");
+            break;
+		}
+		iteration_count += 1;
+
+		if finished.contains(&v) { continue; }
+
+		// 의존성이 있는지, 그리고 모든 의존성이 이미 처리되었는지 확인
+		if let Some(deps) = deps_map.get(&v) {
+			let all_deps_finished = deps.iter().all(|dep| finished.contains(dep));
+
+			if !all_deps_finished {
+				processing_stack.push(v); // 나중에 다시 처리하기 위해 자신을 다시 push
+				processing_stack.extend(deps.iter().filter(|d| !finished.contains(d))); // 처리되지 않은 의존성들을 스택에 추가
+				continue;
+			}
+		}
+
+		// 모든 의존성이 해결되었으므로 현재 노드를 처리
+		let i = v.0 - env.0.len();
+
+		if var_subst[i].is_none() {
+			var_subst[i] = Some((&env.append(var_subst.clone())).eval(exprs[i].clone()));
+		}
+		finished.insert(v);
 	}
+
 	(new_scope, var_subst)
 }
 
