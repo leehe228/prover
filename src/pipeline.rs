@@ -11,6 +11,7 @@ use crate::pipeline::shared::{Ctx, Eval, Schema};
 use crate::pipeline::unify::{Unify, UnifyEnv};
 use crate::pipeline::relation::{Relation as URelation, Expr, JoinKind, Constraint};
 use crate::pipeline::enumerator::ConstraintEnumerator;
+use crate::pipeline::filter::ConstraintFilter;
 
 pub mod normal;
 mod null;
@@ -23,8 +24,9 @@ pub mod syntax;
 mod tests;
 pub mod unify;
 pub mod enumerator;
+pub mod filter;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct QueryInfo {
     /// 쿼리에서 사용된 릴레이션의 인덱스 Set
     pub relations: HashSet<usize>,
@@ -95,30 +97,32 @@ pub fn unify(Input { mut schemas, queries: (mut rel1, mut rel2), constraints, he
 	let mut alias_map: HashMap<usize, usize> = HashMap::new(); // for RelEq
 	let mut attrs_map: HashMap<Expr, Expr> = HashMap::new(); // for AttrsEq
 
-	let analysis_info = analyze_queries(& (rel1.clone(), rel2.clone()), &schemas);
-    log::info!("[Analysis] Detected Info: {:?}", analysis_info);
+    // 1단계: 쿼리 쌍 분석
+	let (q1_info, q2_info) = {
+        let mut info1 = QueryInfo::default();
+        let mut info2 = QueryInfo::default();
+        analyze_relation(&rel1, &schemas, &mut info1, &mut Vec::new());
+        analyze_relation(&rel2, &schemas, &mut info2, &mut Vec::new());
+        (info1, info2)
+    };
+    let combined_info = q1_info.clone().combine(q2_info.clone()); // 열거를 위해 결합
+    log::info!("[Analysis] Detected Info: {:?}", combined_info);
 
-    // 1단계: 제약 조건을 분석하여 쿼리 재작성 계획 수립 및 스키마 강화
-    // 입력으로 constraints가 주어지지 않은 경우에만 열거 로직을 실행
-    // let constraints_to_verify = if constraints.is_empty() {
-    //     let enumerator = ConstraintEnumerator::new();
-    //     let enumerated_constraints = enumerator.enumerate(&analysis_info, &schemas);
-    //     log::info!("[Enumeration] Generated {} constraint candidates.", enumerated_constraints.len());
-    //     for (i, constraint) in enumerated_constraints.iter().enumerate() {
-    //         log::info!("[Candidate {}] {:?}", i + 1, constraint);
-    //     }
-    //     enumerated_constraints
-    // } else {
-    //     constraints
-    // };
-
-    // 현재 enumerate한 constraints는 디버깅용으로 로그 출력만 함 (실제 사용은 아직 X)
-    let enumerator = ConstraintEnumerator::new();
-    let enumerated_constraints = enumerator.enumerate(&analysis_info, &schemas);
+    // 2단계: 분석 정보를 바탕으로 가능한 모든 제약 조건 생성
+    let enumerated_constraints = ConstraintEnumerator::new().enumerate(&combined_info, &schemas);
     log::info!("[Enumeration] Generated {} constraint candidates.", enumerated_constraints.len());
     for (i, constraint) in enumerated_constraints.iter().enumerate() {
         log::info!("[Candidate {}] {:?}", i + 1, constraint);
     }
+
+    // 3단계: "최소 조건 케이스"에 기반하여 불필요한 제약 조건 필터링
+    let filter = ConstraintFilter::new(&q1_info, &q2_info, &rel1, &rel2);
+    let filtered_constraints = filter.filter(enumerated_constraints);
+    log::info!("[Filtering] Filtered to {} meaningful constraints.", filtered_constraints.len());
+    for (i, constraint) in filtered_constraints.iter().enumerate() {
+        log::info!("[Filtered Candidate {}] {:?}", i + 1, constraint);
+    }
+
     // 실제 적용은 받은 constraints 사용
     let constraints_to_verify = constraints;
 
