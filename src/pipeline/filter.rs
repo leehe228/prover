@@ -279,19 +279,36 @@ fn has_is_not_null_filter(rel: &URelation, attr: &Expr) -> bool {
             }
             find_recursive(source, attr, found);
         }
-        // ... 다른 노드 타입에 대한 재귀 호출 ...
+        match current_rel {
+            URelation::Project { source, .. } | URelation::Distinct(source) | URelation::Sort { source, .. } |
+            URelation::Aggregate { source, .. } | URelation::Group { source, .. } => find_recursive(source, attr, found),
+            URelation::Join { left, right, condition, .. } => {
+                if implies_not_null(condition, attr) { *found = true; return; }
+                find_recursive(left, attr, found);
+                find_recursive(right, attr, found);
+            }
+            URelation::Correlate { left, right, .. } | URelation::Except(left, right) => {
+                find_recursive(left, attr, found);
+                find_recursive(right, attr, found);
+            }
+            URelation::Union(rels) | URelation::Intersect(rels) => {
+                for r in rels { find_recursive(r, attr, found); }
+            }
+            _ => (),
+        }
     }
     find_recursive(rel, attr, &mut found);
     found
 }
 
+/// 표현식 `expr`이 `attr`이 NULL이 아님을 암시하는지 재귀적으로 확인
 fn implies_not_null(expr: &Expr, attr: &Expr) -> bool {
     match expr {
         Expr::Op { op, args, .. } => {
             match op.as_str() {
                 // `a > 10` 이나 `a = 5` 와 같은 비교는 NULL에 대해 참이 될 수 없으므로 not-null을 암시
-                "=" | "<>" | "!=" | ">" | "<" | ">=" | "<=" => {
-                    args.contains(attr)
+                "=" | "<>" | "!=" | ">" | "<" | ">=" | "<=" | "LIKE" => {
+                    args.iter().any(|arg| arg == attr)
                 }
                 "IS NOT NULL" => {
                     args.get(0) == Some(attr)
@@ -302,7 +319,7 @@ fn implies_not_null(expr: &Expr, attr: &Expr) -> bool {
                 }
                 "OR" => {
                     // OR의 경우, 모든 쪽이 not-null을 암시해야만 전체가 not-null을 암시
-                    // (e.g., a > 10 OR a < 0). `a IS NULL`이 섞이면 안됩니다.
+                    // 예: a > 10 OR a < 0. `a IS NULL`이 섞이면 이 조건은 false가 됨
                     args.iter().all(|arg| implies_not_null(arg, attr))
                 }
                 _ => false
@@ -326,8 +343,7 @@ fn has_in_subquery(rel: &URelation, a1: &[Expr], r2: VL, a2: &[Expr]) -> bool {
 }
 
 fn has_exists_subquery(rel: &URelation, a1: &[Expr], r2: VL, a2: &[Expr]) -> bool {
-    let mut found = false;
-    // EXISTS (SELECT * FROM r2 WHERE r1.a1 = r2.a2) 패턴을 찾음
+    // EXISTS (SELECT * FROM r2 WHERE r1.a1 = r2.a2) 패턴을 찾습니다.
     let join_condition = Expr::Op {
         op: "=".to_string(),
         args: vec![a1[0].clone(), a2[0].clone()],
@@ -335,36 +351,14 @@ fn has_exists_subquery(rel: &URelation, a1: &[Expr], r2: VL, a2: &[Expr]) -> boo
         rel: None,
     };
 
-    fn find_recursive(current_rel: &URelation, r2_idx: usize, join_cond: &Expr, found: &mut bool) {
-        if *found { return; }
-        if let URelation::Filter { condition, .. } = current_rel {
-            if let Expr::Op { op, rel: Some(subquery), .. } = condition {
-                if op == "EXISTS" {
-                    if let URelation::Filter { condition: sub_cond, source } = &**subquery {
-                        if **source == URelation::Scan(VL(r2_idx)) && sub_cond == join_cond {
-                            *found = true;
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-        // Recurse into children
-        match current_rel {
-            URelation::Filter { source, .. } | URelation::Project { source, .. } | URelation::Distinct(source) |
-            URelation::Sort { source, .. } | URelation::Aggregate { source, .. } | URelation::Group { source, .. } => {
-                find_recursive(source, r2_idx, join_cond, found);
-            }
-            URelation::Join { left, right, .. } | URelation::Correlate { left, right, .. } | URelation::Except(left, right) => {
-                find_recursive(left, r2_idx, join_cond, found);
-                find_recursive(right, r2_idx, join_cond, found); 
-            }
-            URelation::Union(rels) | URelation::Intersect(rels) => {
-                for r in rels { find_recursive(r, r2_idx, join_cond, found); }
-            }
-            _ => (),
-        }
-    }
-    find_recursive(rel, r2.0, &join_condition, &mut found);
-    found
+    let target_expr = Expr::Op {
+        op: "EXISTS".to_string(),
+        args: vec![],
+        ty: DataType::Boolean,
+        rel: Some(Box::new(URelation::Filter {
+            condition: join_condition,
+            source: Box::new(URelation::Scan(r2)),
+        }))
+    };
+    find_expr_in_relation(rel, &target_expr)
 }

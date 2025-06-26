@@ -179,8 +179,8 @@ fn verify_with_constraints(
 		rewrite_exprs(&mut rel2, &attrs_map);
 	}
 
-    let env = relation::Env(&schemas, &subst, 0);
-	log::info!("Schemas:\n{:?}", schemas);
+    let env = relation::Env(&temp_schemas, &subst, 0);
+	log::info!("Schemas:\n{:?}", temp_schemas);
 	log::info!("Input:\n{}\n{}", help.0, help.1);
 	stats.complete_fragment = rel1.complete() && rel2.complete();
 	if rel1 == rel2 {
@@ -216,7 +216,7 @@ fn verify_with_constraints(
 	let z3_env = Z3Env::empty(ctx.clone());
 
 	if !constraints.is_empty() {
-		let formula = z3_env.eval_constraints(&schemas, constraints);
+		let formula = z3_env.eval_constraints(&temp_schemas, constraints);
 		log::info!("Global Constraints Formula:\n{}", formula);
 		ctx.constraints_formula.replace(Some(formula));
 	}
@@ -268,21 +268,31 @@ pub fn unify(Input { schemas, queries, constraints, help }: Input) -> (bool, Sta
     let combined_info = q1_info.clone().combine(q2_info.clone()); // 열거를 위해 결합
     log::info!("[Analysis] Detected Info: {:?}", combined_info);
 
-    // 2단계: 분석 정보를 바탕으로 가능한 모든 제약 조건 생성
-    let enumerated_constraints = ConstraintEnumerator::new().enumerate(&combined_info, &schemas);
-    log::info!("[Enumeration] Generated {} constraint candidates.", enumerated_constraints.len());
-    for (i, constraint) in enumerated_constraints.iter().enumerate() {
-        log::info!("[Candidate {}] {:?}", i + 1, constraint);
-    }
+    let filtered_constraints: Vec<Constraint> = if constraints.is_empty() {
+        // 2단계: 분석 정보를 바탕으로 가능한 모든 제약 조건 생성
+        let enumerated_constraints = ConstraintEnumerator::new().enumerate(&combined_info, &schemas);
+        log::info!("[Enumeration] Generated {} constraint candidates.", enumerated_constraints.len());
+        for (i, constraint) in enumerated_constraints.iter().enumerate() {
+            log::info!("[Candidate {}] {:?}", i + 1, constraint);
+        }
 
-    // 3단계: "최소 조건 케이스"에 기반하여 불필요한 제약 조건 필터링
-    let filter = ConstraintFilter::new(&q1_info, &q2_info, &rel1, &rel2, &schemas);
-    let filtered_constraints = filter.filter(enumerated_constraints);
-    log::info!("[Filtering] Filtered to {} meaningful constraints.", filtered_constraints.len());
-    for (i, constraint) in filtered_constraints.iter().enumerate() {
-        log::info!("[Filtered Candidate {}] {:?}", i + 1, constraint);
-    }
-
+        // 3단계: "최소 조건 케이스"에 기반하여 불필요한 제약 조건 필터링
+        let filter = ConstraintFilter::new(&q1_info, &q2_info, &rel1, &rel2, &schemas);
+        let filtered = filter.filter(enumerated_constraints);
+        log::info!("[Filtering] Filtered to {} meaningful constraints.", filtered.len());
+        for (i, constraint) in filtered.iter().enumerate() {
+            log::info!("[Filtered Candidate {}] {:?}", i + 1, constraint);
+        }
+        filtered
+    } else {
+        // 주어진 제약 조건을 그대로 사용
+        log::info!("[Input Constraints] Using provided constraints directly.");
+        for (i, constraint) in constraints.iter().enumerate() {
+            log::info!("[Input Constraint {}] {:?}", i + 1, constraint);
+        }
+        constraints
+    };
+    
     // 4단계: 최소 제약 조건 탐색 (Minimal Constraint Search)
     let (initial_provable, initial_stats) = verify_with_constraints(&schemas, (rel1.clone(), rel2.clone()), &filtered_constraints, &help);
 
