@@ -116,7 +116,7 @@ pub fn unify(Input { mut schemas, queries: (mut rel1, mut rel2), constraints, he
     }
 
     // 3단계: "최소 조건 케이스"에 기반하여 불필요한 제약 조건 필터링
-    let filter = ConstraintFilter::new(&q1_info, &q2_info, &rel1, &rel2);
+    let filter = ConstraintFilter::new(&q1_info, &q2_info, &rel1, &rel2, &schemas);
     let filtered_constraints = filter.filter(enumerated_constraints);
     log::info!("[Filtering] Filtered to {} meaningful constraints.", filtered_constraints.len());
     for (i, constraint) in filtered_constraints.iter().enumerate() {
