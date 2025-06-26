@@ -14,7 +14,7 @@ use env_logger::{Builder, Env, Target};
 use itertools::Itertools;
 use walkdir::WalkDir;
 
-use crate::pipeline::{unify, Input, Stats};
+use crate::pipeline::{unify, Input, Stats, relation::Constraint};
 
 mod pipeline;
 
@@ -32,7 +32,7 @@ fn visit<P: AsRef<Path>>(dir: P, mut cb: impl FnMut(usize, &Path)) -> io::Result
 
 #[derive(Debug)]
 enum CosetteResult {
-	Provable(Stats),
+	Provable(Stats, Vec<Constraint>),
 	NotProvable(Stats),
 	ParseErr(serde_json::Error),
 	Panic(Box<dyn Any + Send>),
@@ -56,14 +56,15 @@ fn main() -> io::Result<()> {
 			let result =
 				std::panic::catch_unwind(|| match serde_json::from_str::<Input>(&contents) {
 					Ok(rel) => {
-						let (provable, case_stats) = unify(rel);
+						let (provable, case_stats, min_constraints) = unify(rel); // constraint 함께 반환
 						println!(
 							"Equivalence is {}provable for {}",
 							if provable { "" } else { "not " },
 							path.file_name().unwrap().to_str().unwrap(),
 						);
 						if provable {
-							Provable(case_stats)
+							// Provable(case_stats)
+							Provable(case_stats, min_constraints)
 						} else {
 							NotProvable(case_stats)
 						}
@@ -82,9 +83,9 @@ fn main() -> io::Result<()> {
 			};
 			let result_file = File::create(path.with_extension("result")).unwrap();
 			let case_stats = match &result {
-				Provable(stats) | NotProvable(stats) => {
+				Provable(stats, ..) | NotProvable(stats) => {
 					let mut stats = stats.clone();
-					stats.provable = matches!(result, Provable(_));
+					stats.provable = matches!(result, Provable(_, ..));
 					stats.total_duration = start_time.elapsed();
 					stats
 				},
@@ -100,10 +101,17 @@ fn main() -> io::Result<()> {
 		})?;
 	}
 	println!("\n\nSTATISTICS");
-	let (a, b): (Vec<_>, _) = stats.values().partition(|v| matches!(v, CosetteResult::Provable(_)));
+	let (a, b): (Vec<_>, _) = stats.values().partition(|v| matches!(v, CosetteResult::Provable(..)));
 	let (al, bl) = (a.len(), b.len());
 	for (name, result) in stats {
-		println!("{}\t{:?}", name, result);
+		// println!("{}\t{:?}", name, result);
+		match result {
+			CosetteResult::Provable(stats, constraints) => {
+				let constraints_str = serde_json::to_string(&constraints).unwrap_or_else(|_| "[]".to_string());
+				println!("{}\tProvable\t{}\t{:?}", name, constraints_str, stats);
+			}
+			_ => println!("{}\t{:?}", name, result),
+		}
 	}
 	println!("Provable: {} / {}", al, al + bl);
 	Ok(())
