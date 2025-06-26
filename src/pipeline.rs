@@ -91,49 +91,27 @@ pub struct Stats {
 	pub total_duration: Duration,
 }
 
-pub fn unify(Input { mut schemas, queries: (mut rel1, mut rel2), constraints, help }: Input) -> (bool, Stats) {
-	let mut stats = Stats::default();
+fn verify_with_constraints(
+    schemas: &[Schema],
+    query_pair: (URelation, URelation),
+    constraints: &[Constraint],
+    help: &(String, String)
+) -> (bool, Stats) {
+    let (mut rel1, mut rel2) = query_pair;
+    let mut stats = Stats::default();
 	let subst = vector![];
 	let mut alias_map: HashMap<usize, usize> = HashMap::new(); // for RelEq
 	let mut attrs_map: HashMap<Expr, Expr> = HashMap::new(); // for AttrsEq
 
-    // 1단계: 쿼리 쌍 분석
-	let (q1_info, q2_info) = {
-        let mut info1 = QueryInfo::default();
-        let mut info2 = QueryInfo::default();
-        analyze_relation(&rel1, &schemas, &mut info1, &mut Vec::new());
-        analyze_relation(&rel2, &schemas, &mut info2, &mut Vec::new());
-        (info1, info2)
-    };
-    let combined_info = q1_info.clone().combine(q2_info.clone()); // 열거를 위해 결합
-    log::info!("[Analysis] Detected Info: {:?}", combined_info);
-
-    // 2단계: 분석 정보를 바탕으로 가능한 모든 제약 조건 생성
-    let enumerated_constraints = ConstraintEnumerator::new().enumerate(&combined_info, &schemas);
-    log::info!("[Enumeration] Generated {} constraint candidates.", enumerated_constraints.len());
-    for (i, constraint) in enumerated_constraints.iter().enumerate() {
-        log::info!("[Candidate {}] {:?}", i + 1, constraint);
-    }
-
-    // 3단계: "최소 조건 케이스"에 기반하여 불필요한 제약 조건 필터링
-    let filter = ConstraintFilter::new(&q1_info, &q2_info, &rel1, &rel2, &schemas);
-    let filtered_constraints = filter.filter(enumerated_constraints);
-    log::info!("[Filtering] Filtered to {} meaningful constraints.", filtered_constraints.len());
-    for (i, constraint) in filtered_constraints.iter().enumerate() {
-        log::info!("[Filtered Candidate {}] {:?}", i + 1, constraint);
-    }
-
-    // 실제 적용은 받은 constraints 사용
-    let constraints_to_verify = constraints;
-
 	// 1단계: 제약 조건을 사용하여 쿼리 재작성 계획 수립 및 스키마 강화
-	for constraint in &constraints_to_verify {
+    let mut temp_schemas = schemas.to_vec(); // 가변 스키마를 위해 복제
+	for constraint in constraints {
 		use crate::pipeline::relation::Expr::Col;
         use crate::pipeline::relation::Relation as RelationEnum;
 
         match constraint {
             Constraint::NotNull { r, a } => {
-                if let Some(schema) = schemas.get_mut(r.0) {
+                if let Some(schema) = temp_schemas.get_mut(r.0) {
                     for expr in a {
                         if let Col { column, .. } = expr {
                             if let Some(nullable) = schema.nullabilities.get_mut(column.0) {
@@ -144,7 +122,7 @@ pub fn unify(Input { mut schemas, queries: (mut rel1, mut rel2), constraints, he
                 }
             }
             Constraint::Unique { r, a } => {
-                if let Some(schema) = schemas.get_mut(r.0) {
+                if let Some(schema) = temp_schemas.get_mut(r.0) {
                     let key_set: std::collections::HashSet<usize> = a.iter().filter_map(|expr| {
                         if let Col { column, .. } = expr { Some(column.0) } else { None }
                     }).collect();
@@ -156,7 +134,7 @@ pub fn unify(Input { mut schemas, queries: (mut rel1, mut rel2), constraints, he
                 }
             }
             Constraint::RefAttrs { r1, a1, r2, a2 } => {
-                if let Some(schema) = schemas.get_mut(r1.0) {
+                if let Some(schema) = temp_schemas.get_mut(r1.0) {
                     let subquery = RelationEnum::Project {
                         columns: a2.clone(),
                         source: Box::new(RelationEnum::Scan(*r2)),
@@ -186,10 +164,11 @@ pub fn unify(Input { mut schemas, queries: (mut rel1, mut rel2), constraints, he
         }
 	}
 
-	rewrite_joins_for_refattrs(&mut rel1, &constraints_to_verify, &schemas);
-	rewrite_joins_for_refattrs(&mut rel2, &constraints_to_verify, &schemas);
+    // 2단계: 수립된 계획에 따라 쿼리 재작성 실행
+	rewrite_joins_for_refattrs(&mut rel1, constraints, &temp_schemas);
+	rewrite_joins_for_refattrs(&mut rel2, constraints, &temp_schemas);
 
-	// 2단계: 수립된 계획에 따라 쿼리 재작성 실행
+	// 수립된 계획에 따라 쿼리 재작성 실행
 	if !alias_map.is_empty() {
 		rewrite_scans(&mut rel1, &alias_map);
 		rewrite_scans(&mut rel2, &alias_map);
@@ -200,7 +179,7 @@ pub fn unify(Input { mut schemas, queries: (mut rel1, mut rel2), constraints, he
 		rewrite_exprs(&mut rel2, &attrs_map);
 	}
 
-	let env = relation::Env(&schemas, &subst, 0);
+    let env = relation::Env(&schemas, &subst, 0);
 	log::info!("Schemas:\n{:?}", schemas);
 	log::info!("Input:\n{}\n{}", help.0, help.1);
 	stats.complete_fragment = rel1.complete() && rel2.complete();
@@ -236,8 +215,8 @@ pub fn unify(Input { mut schemas, queries: (mut rel1, mut rel2), constraints, he
 	let ctx = Rc::new(Ctx::new_with_stats(Solver::new(z3_ctx), stats));
 	let z3_env = Z3Env::empty(ctx.clone());
 
-	if !constraints_to_verify.is_empty() {
-		let formula = z3_env.eval_constraints(&schemas, &constraints_to_verify);
+	if !constraints.is_empty() {
+		let formula = z3_env.eval_constraints(&schemas, constraints);
 		log::info!("Global Constraints Formula:\n{}", formula);
 		ctx.constraints_formula.replace(Some(formula));
 	}
@@ -269,6 +248,74 @@ pub fn unify(Input { mut schemas, queries: (mut rel1, mut rel2), constraints, he
 	ctx.stats.borrow_mut().unify_duration = unify_start.elapsed();
 	let stats = ctx.stats.borrow().clone();
 	(res, stats)
+}
+
+pub fn unify(Input { schemas, queries, constraints, help }: Input) -> (bool, Stats) {
+	if !constraints.is_empty() {
+        return verify_with_constraints(&schemas, queries, &constraints, &help);
+    }
+
+    let (rel1, rel2) = queries;
+
+    // 1단계: 쿼리 쌍 분석
+	let (q1_info, q2_info) = {
+        let mut info1 = QueryInfo::default();
+        let mut info2 = QueryInfo::default();
+        analyze_relation(&rel1, &schemas, &mut info1, &mut Vec::new());
+        analyze_relation(&rel2, &schemas, &mut info2, &mut Vec::new());
+        (info1, info2)
+    };
+    let combined_info = q1_info.clone().combine(q2_info.clone()); // 열거를 위해 결합
+    log::info!("[Analysis] Detected Info: {:?}", combined_info);
+
+    // 2단계: 분석 정보를 바탕으로 가능한 모든 제약 조건 생성
+    let enumerated_constraints = ConstraintEnumerator::new().enumerate(&combined_info, &schemas);
+    log::info!("[Enumeration] Generated {} constraint candidates.", enumerated_constraints.len());
+    for (i, constraint) in enumerated_constraints.iter().enumerate() {
+        log::info!("[Candidate {}] {:?}", i + 1, constraint);
+    }
+
+    // 3단계: "최소 조건 케이스"에 기반하여 불필요한 제약 조건 필터링
+    let filter = ConstraintFilter::new(&q1_info, &q2_info, &rel1, &rel2, &schemas);
+    let filtered_constraints = filter.filter(enumerated_constraints);
+    log::info!("[Filtering] Filtered to {} meaningful constraints.", filtered_constraints.len());
+    for (i, constraint) in filtered_constraints.iter().enumerate() {
+        log::info!("[Filtered Candidate {}] {:?}", i + 1, constraint);
+    }
+
+    // 4단계: 최소 제약 조건 탐색 (Minimal Constraint Search)
+    let (initial_provable, initial_stats) = verify_with_constraints(&schemas, (rel1.clone(), rel2.clone()), &filtered_constraints, &help);
+
+    if !initial_provable {
+        log::info!("[SearchRelaxed] Not provable with all filtered constraints. Aborting search.");
+        return (false, initial_stats);
+    }
+
+    log::info!("[SearchRelaxed] Provable with all constraints. Starting relaxation...");
+    let mut minimal_constraints = filtered_constraints;
+
+    let mut i = minimal_constraints.len();
+    while i > 0 {
+        i -= 1;
+        let constraint_to_remove = minimal_constraints.remove(i);
+        
+        log::info!("[SearchRelaxed] Trying to remove: {:?}", constraint_to_remove);
+        let (provable_after_removal, _) = verify_with_constraints(&schemas, (rel1.clone(), rel2.clone()), &minimal_constraints, &help);
+
+        if !provable_after_removal {
+             log::info!("[SearchRelaxed] FAILED: Constraint is essential. Keeping it.");
+             minimal_constraints.insert(i, constraint_to_remove); // 다시 삽입
+        } else {
+            log::info!("[SearchRelaxed] SUCCESS: Constraint is redundant. Removing it.");
+        }
+    }
+
+    log::info!("[SearchRelaxed] Found minimal constraint set ({} constraints):", minimal_constraints.len());
+    for (i, constraint) in minimal_constraints.iter().enumerate() {
+        log::info!("[Minimal Set {}] {:?}", i + 1, constraint);
+    }
+
+    (true, initial_stats)	
 }
 
 fn rewrite_scans(rel: &mut URelation, alias_map: &HashMap<usize, usize>) {

@@ -269,17 +269,51 @@ fn has_distinct(rel: &URelation) -> bool {
 }
 
 fn has_is_not_null_filter(rel: &URelation, attr: &Expr) -> bool {
-    let target_expr = Expr::Op { op: "IS NOT NULL".to_string(), args: vec![attr.clone()], ty: DataType::Boolean, rel: None };
-    find_expr_in_relation(rel, &target_expr)
+    let mut found = false;
+    fn find_recursive(current_rel: &URelation, attr: &Expr, found: &mut bool) {
+        if *found { return; }
+        if let URelation::Filter { condition, source } = current_rel {
+            if implies_not_null(condition, attr) {
+                *found = true;
+                return;
+            }
+            find_recursive(source, attr, found);
+        }
+        // ... 다른 노드 타입에 대한 재귀 호출 ...
+    }
+    find_recursive(rel, attr, &mut found);
+    found
+}
+
+fn implies_not_null(expr: &Expr, attr: &Expr) -> bool {
+    match expr {
+        Expr::Op { op, args, .. } => {
+            match op.as_str() {
+                // `a > 10` 이나 `a = 5` 와 같은 비교는 NULL에 대해 참이 될 수 없으므로 not-null을 암시
+                "=" | "<>" | "!=" | ">" | "<" | ">=" | "<=" => {
+                    args.contains(attr)
+                }
+                "IS NOT NULL" => {
+                    args.get(0) == Some(attr)
+                }
+                "AND" => {
+                    // AND의 경우, 어느 한 쪽이라도 not-null을 암시하면 전체가 not-null을 암시
+                    args.iter().any(|arg| implies_not_null(arg, attr))
+                }
+                "OR" => {
+                    // OR의 경우, 모든 쪽이 not-null을 암시해야만 전체가 not-null을 암시
+                    // (e.g., a > 10 OR a < 0). `a IS NULL`이 섞이면 안됩니다.
+                    args.iter().all(|arg| implies_not_null(arg, attr))
+                }
+                _ => false
+            }
+        }
+        _ => false
+    }
 }
 
 fn has_in_subquery(rel: &URelation, a1: &[Expr], r2: VL, a2: &[Expr]) -> bool {
-    // a1은 외부 쿼리의 속성이므로, rel 트리 전체에서 a1이 사용되는지 확인
-    if !find_expr_in_relation(rel, &a1[0]) {
-        return false;
-    }
-    // IN 연산자의 서브쿼리 부분이 제약조건의 r2, a2와 일치하는지 확인
-    let target_subquery = Expr::Op {
+    let target_expr = Expr::Op {
         op: "IN".to_string(),
         args: vec![a1[0].clone()],
         ty: DataType::Boolean,
@@ -288,7 +322,7 @@ fn has_in_subquery(rel: &URelation, a1: &[Expr], r2: VL, a2: &[Expr]) -> bool {
             source: Box::new(URelation::Scan(r2)),
         })),
     };
-    find_expr_in_relation(rel, &target_subquery)
+    find_expr_in_relation(rel, &target_expr)
 }
 
 fn has_exists_subquery(rel: &URelation, a1: &[Expr], r2: VL, a2: &[Expr]) -> bool {

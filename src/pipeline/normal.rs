@@ -635,7 +635,8 @@ impl<'c> Z3Env<'c> {
         scope.into()
     }
 
-    pub fn eval_constraints(&self, schemas: &[Schema], constraints: &Vec<relation::Constraint>) -> Bool<'c> {
+    // pub fn eval_constraints(&self, schemas: &[Schema], constraints: &Vec<relation::Constraint>) -> Bool<'c> {
+    pub fn eval_constraints(&self, schemas: &[Schema], constraints: &[relation::Constraint]) -> Bool<'c> {
         let constraint_formulas: Vec<_> = constraints.iter()
             .map(|c| self.eval_constraint(schemas, c))
             .collect();
