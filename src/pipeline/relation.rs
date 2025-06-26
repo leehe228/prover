@@ -462,7 +462,7 @@ pub enum JoinKind {
 #[serde(rename_all = "camelCase")]
 pub struct AggCall {
 	#[serde(alias = "operator")]
-	op: String,
+	pub op: String,
 	#[serde(alias = "operand")]
 	pub args: Vec<Expr>,
 	#[serde(default = "default_distinct")]

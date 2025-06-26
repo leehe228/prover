@@ -22,6 +22,41 @@ pub mod syntax;
 mod tests;
 pub mod unify;
 
+#[derive(Debug, Default)]
+pub struct QueryInfo {
+    /// 쿼리에서 사용된 릴레이션의 인덱스 Set
+    pub relations: HashSet<usize>,
+    /// 쿼리에서 사용된 속성(칼럼)의 Set (relation_index, column_index)
+    pub attributes: HashSet<(usize, usize)>,
+    /// 쿼리에서 사용된 미해석 술어(UDF)의 Set
+    pub predicates: HashSet<String>,
+    /// 쿼리에서 사용된 집계 함수(Aggregation)의 Set
+    pub aggregates: HashSet<String>,
+}
+
+impl QueryInfo {
+    /// 두 쿼리 분석 결과를 병합하는 함수
+    pub fn combine(mut self, other: Self) -> Self {
+        self.relations.extend(other.relations);
+        self.attributes.extend(other.attributes);
+        self.predicates.extend(other.predicates);
+        self.aggregates.extend(other.aggregates);
+        self
+    }
+}
+
+/// 쿼리 쌍을 분석하여 사용된 요소 정보를 추출하는 최상위 함수
+pub fn analyze_queries(queries: &(URelation, URelation), schemas: &[Schema]) -> QueryInfo {
+    let (query1, query2) = queries;
+    let mut info1 = QueryInfo::default();
+    let mut info2 = QueryInfo::default();
+
+    analyze_relation(query1, schemas, &mut info1, &mut Vec::new());
+    analyze_relation(query2, schemas, &mut info2, &mut Vec::new());
+
+    info1.combine(info2)
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct Input {
 	schemas: Vec<Schema>,
@@ -55,8 +90,8 @@ pub fn unify(Input { mut schemas, queries: (mut rel1, mut rel2), constraints, he
 	let mut alias_map: HashMap<usize, usize> = HashMap::new(); // for RelEq
 	let mut attrs_map: HashMap<Expr, Expr> = HashMap::new(); // for AttrsEq
 
-	rewrite_joins_for_refattrs(&mut rel1, &constraints, &schemas);
-	rewrite_joins_for_refattrs(&mut rel2, &constraints, &schemas);
+	let analysis_info = analyze_queries(& (rel1.clone(), rel2.clone()), &schemas);
+    log::info!("[Analysis] Detected Info: {:?}", analysis_info);
 
 	// 1단계: 제약 조건을 사용하여 쿼리 재작성 계획 수립 및 스키마 강화
 	for constraint in &constraints {
@@ -121,6 +156,9 @@ pub fn unify(Input { mut schemas, queries: (mut rel1, mut rel2), constraints, he
 		}
 	}
 
+	rewrite_joins_for_refattrs(&mut rel1, &constraints, &schemas);
+	rewrite_joins_for_refattrs(&mut rel2, &constraints, &schemas);
+
 	// 2단계: 수립된 계획에 따라 쿼리 재작성 실행
 	if !alias_map.is_empty() {
 		rewrite_scans(&mut rel1, &alias_map);
@@ -131,9 +169,6 @@ pub fn unify(Input { mut schemas, queries: (mut rel1, mut rel2), constraints, he
 		rewrite_exprs(&mut rel1, &attrs_map);
 		rewrite_exprs(&mut rel2, &attrs_map);
 	}
-
-	rewrite_joins_for_refattrs(&mut rel1, &constraints, &schemas);
-	rewrite_joins_for_refattrs(&mut rel2, &constraints, &schemas);
 
 	let env = relation::Env(&schemas, &subst, 0);
 	log::info!("Schemas:\n{:?}", schemas);
@@ -399,5 +434,108 @@ fn rewrite_exprs(rel: &mut URelation, attrs_map: &HashMap<Expr, Expr>) {
             rewrite_exprs(source, attrs_map);
         }
         _ => (),
+    }
+}
+
+/// Relation 트리를 재귀적으로 순회하며 정보를 분석하는 함수.
+/// `current_scope`는 현재 컨텍스트에서 접근 가능한 (릴레이션 인덱스, 칼럼 수)의 목록입니다.
+fn analyze_relation(rel: &URelation, schemas: &[Schema], info: &mut QueryInfo, current_scope: &mut Vec<(usize, usize)>) {
+    match rel {
+        URelation::Scan(vl) => {
+            info.relations.insert(vl.0);
+            // 현재 스캔하는 릴레이션의 정보를 스코프에 추가
+            current_scope.push((vl.0, schemas[vl.0].types.len()));
+        }
+        URelation::Filter { condition, source } => {
+            analyze_relation(source, schemas, info, current_scope);
+            analyze_expr(condition, schemas, info, current_scope);
+        }
+        URelation::Project { columns, source } => {
+            analyze_relation(source, schemas, info, current_scope);
+            for col in columns {
+                analyze_expr(col, schemas, info, current_scope);
+            }
+        }
+        URelation::Join { left, right, condition, .. } => {
+            let mut left_scope = Vec::new();
+            analyze_relation(left, schemas, info, &mut left_scope);
+
+            let mut right_scope = Vec::new();
+            analyze_relation(right, schemas, info, &mut right_scope);
+            
+            // Join된 새로운 스코프를 생성하여 상위로 전달
+            current_scope.extend(left_scope.clone());
+            current_scope.extend(right_scope);
+            
+            // 조인 조건 분석 시, 결합된 스코프를 전달
+            analyze_expr(condition, schemas, info, current_scope);
+        }
+        URelation::Union(rels) | URelation::Intersect(rels) => {
+            for r in rels {
+                analyze_relation(r, schemas, info, &mut Vec::new()); // Union/Intersect는 scope를 공유하지 않음
+            }
+        }
+        URelation::Except(left, right) => {
+            analyze_relation(left, schemas, info, &mut Vec::new());
+            analyze_relation(right, schemas, info, &mut Vec::new());
+        }
+        URelation::Distinct(source) | URelation::Sort { source, .. } => {
+            analyze_relation(source, schemas, info, current_scope);
+        }
+        URelation::Aggregate { columns, source } => {
+            analyze_relation(source, schemas, info, current_scope);
+            for agg_call in columns {
+                info.aggregates.insert(agg_call.op.clone());
+                for arg in &agg_call.args {
+                    analyze_expr(arg, schemas, info, current_scope);
+                }
+            }
+        }
+        URelation::Group { keys, columns, source } => {
+            analyze_relation(source, schemas, info, current_scope);
+            for key in keys {
+                analyze_expr(key, schemas, info, current_scope);
+            }
+            for agg_call in columns {
+                info.aggregates.insert(agg_call.op.clone());
+                for arg in &agg_call.args {
+                    analyze_expr(arg, schemas, info, current_scope);
+                }
+            }
+        }
+        _ => (),
+    }
+}
+
+/// Expr 트리를 재귀적으로 순회하며 정보를 분석하는 함수
+fn analyze_expr(expr: &Expr, schemas: &[Schema], info: &mut QueryInfo, current_scope: &[(usize, usize)]) {
+    match expr {
+        Expr::Col { column, .. } => {
+            let mut offset = 0;
+            for &(rel_idx, arity) in current_scope {
+                if column.0 >= offset && column.0 < offset + arity {
+                    // 원래 칼럼 인덱스(0-based)로 변환하여 (릴레이션 인덱스, 칼럼 인덱스) 쌍을 추가
+                    info.attributes.insert((rel_idx, column.0 - offset));
+                    return;
+                }
+                offset += arity;
+            }
+        }
+        Expr::Op { op, args, rel, .. } => {
+            // 숫자 리터럴인지 확인하는 로직 추가
+            let is_numeric_literal = op.parse::<i64>().is_ok() || op.parse::<f64>().is_ok();
+            
+            // SQL 표준 연산자 및 숫자 리터럴이 아닌 경우 미해석 술어(UDF)로 간주
+            if !relation::num_op(op) && !relation::num_cmp(op) && !is_numeric_literal && op != "IN" && op != "AND" && op != "OR" && op != "NOT" {
+                info.predicates.insert(op.clone());
+            }
+
+            for arg in args {
+                analyze_expr(arg, schemas, info, current_scope);
+            }
+            if let Some(sub_rel) = rel {
+                analyze_relation(sub_rel, schemas, info, &mut Vec::new()); // 서브쿼리는 독립적인 스코프
+            }
+        }
     }
 }
