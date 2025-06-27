@@ -283,6 +283,12 @@ pub fn unify(Input { schemas, queries, constraints, help }: Input) -> (bool, Sta
     for (i, constraint) in filtered_constraints.iter().enumerate() {
         log::info!("[Filtered Candidate {}] {:?}", i + 1, constraint);
     }
+
+    // TODO
+    if filtered_constraints.len() > 6 {
+        log::warn!("[Pruning] Too many constraint candidates ({}), skipping verification to prevent potential crash.", filtered_constraints.len());
+        return (false, Stats::default(), filtered_constraints);
+    }
     
     // 4단계: 최소 제약 조건 탐색 (Minimal Constraint Search)
     let (initial_provable, initial_stats) = verify_with_constraints(&schemas, (rel1.clone(), rel2.clone()), &filtered_constraints, &help);
