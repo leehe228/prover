@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use imbl::vector;
 use serde::{Deserialize, Serialize};
 use z3::{Config, Context, Solver};
+use itertools::Itertools;
 
 use crate::pipeline::normal::{Relation, Z3Env};
 use crate::pipeline::shared::{Ctx, Eval, Schema};
@@ -89,6 +90,58 @@ pub struct Stats {
 	pub stable_duration: Duration,
 	pub unify_duration: Duration,
 	pub total_duration: Duration,
+}
+
+fn search_minimal_set_with_cache(
+    schemas: &[Schema],
+    queries: (URelation, URelation),
+    constraints_to_test: &[Constraint],
+    help: &(String, String),
+    memo: &mut HashMap<Vec<Constraint>, bool>
+) -> (bool, Vec<Constraint>) {
+    // 1. 현재 제약 조건 집합에 대한 결과를 캐시에서 확인
+    let mut sorted_key = constraints_to_test.to_vec();
+    sorted_key.sort(); // 키의 일관성을 위해 정렬
+
+    if let Some(&provable) = memo.get(&sorted_key) {
+        if !provable {
+            return (false, vec![]); // 이전에 실패한 조합은 즉시 반환
+        }
+    } else {
+        // 캐시 없으면 직접 검증
+        let (provable, _) = verify_with_constraints(schemas, queries.clone(), constraints_to_test, help);
+        memo.insert(sorted_key.clone(), provable);
+        if !provable {
+            return (false, vec![]);
+        }
+    }
+
+    // 2. 검증에 성공했으므로, 이제부터 불필요한 제약을 하나씩 제거 (Relaxation)
+    let mut minimal_set = constraints_to_test.to_vec();
+    let mut i = minimal_set.len();
+    while i > 0 {
+        i -= 1;
+        let constraint_to_remove = minimal_set.remove(i);
+
+        // 하나를 제외한 부분집합으로 다시 검증
+        let (provable_after_removal, _) = search_minimal_set_with_cache(schemas, queries.clone(), &minimal_set, help, memo);
+
+        if !provable_after_removal {
+            // 제거 -> 실패했다면 해당 제약은 필수임
+            minimal_set.insert(i, constraint_to_remove); // 다시 삽입
+        }
+        // 제거해도 성공했다면, 제거된 상태 유지 (무의미한 제약임)
+    }
+    (true, minimal_set)
+}
+
+/// 제약 조건의 우선순위를 반환하는 함수
+fn get_constraint_priority(c: &Constraint) -> u8 {
+    match c {
+        Constraint::RelEq { .. } | Constraint::AttrsEq { .. } | Constraint::RefAttrs { .. } => 1, // 1순위: 구조 재작성
+        Constraint::Unique { .. } | Constraint::NotNull { .. } => 2, // 2순위: 스키마 강화
+        Constraint::PredEq { .. } | Constraint::SubAttr { .. } => 3, // 3순위: 논리적 공리
+    }
 }
 
 fn verify_with_constraints(
@@ -283,15 +336,9 @@ pub fn unify(Input { schemas, queries, constraints, help }: Input) -> (bool, Sta
     for (i, constraint) in filtered_constraints.iter().enumerate() {
         log::info!("[Filtered Candidate {}] {:?}", i + 1, constraint);
     }
-
-    // TODO
-    if filtered_constraints.len() > 6 {
-        log::warn!("[Pruning] Too many constraint candidates ({}), skipping verification to prevent potential crash.", filtered_constraints.len());
-        return (false, Stats::default(), filtered_constraints);
-    }
     
     // 4단계: 최소 제약 조건 탐색 (Minimal Constraint Search)
-    let (initial_provable, initial_stats) = verify_with_constraints(&schemas, (rel1.clone(), rel2.clone()), &filtered_constraints, &help);
+    /* let (initial_provable, initial_stats) = verify_with_constraints(&schemas, (rel1.clone(), rel2.clone()), &filtered_constraints, &help);
 
     if !initial_provable {
         log::info!("[SearchRelaxed] Not provable with all filtered constraints. Aborting search.");
@@ -315,14 +362,41 @@ pub fn unify(Input { schemas, queries, constraints, help }: Input) -> (bool, Sta
         } else {
             log::info!("[SearchRelaxed] SUCCESS: Constraint is redundant. Removing it.");
         }
-    }
+    } */
 
-    log::info!("[SearchRelaxed] Found minimal constraint set ({} constraints):", minimal_constraints.len());
+    const MAX_CONSTRAINTS_SUBSET_SIZE: usize = 3;
+
+    if filtered_constraints.len() <= MAX_CONSTRAINTS_SUBSET_SIZE {
+        // Case A. 후보가 3개 이하면 바로 최소 집합 탐색
+        let (provable, minimal_set) = search_minimal_set_with_cache(&schemas, (rel1, rel2), &filtered_constraints, &help, &mut HashMap::new());
+        return (provable, Stats::default(), minimal_set);    
+    } else {
+        // Case B. 후보가 3개 초과라면, 우선순위 기반으로 3개 조합을 만들어 탐색
+        log::info!("[Heuristic Search] More than {} constraints, switching to combination mode.", MAX_CONSTRAINTS_SUBSET_SIZE);
+
+        let mut sorted_constraints = filtered_constraints;
+        sorted_constraints.sort_by_key(|c| get_constraint_priority(c));
+
+        let mut memo = HashMap::new();
+        
+        for subset in sorted_constraints.into_iter().combinations(MAX_CONSTRAINTS_SUBSET_SIZE) {
+            log::info!("[Heuristic Search] Trying combination: {:?}", subset);
+            let (provable, minimal_set) = search_minimal_set_with_cache(&schemas, (rel1.clone(), rel2.clone()), &subset, &help, &mut memo);
+
+            if provable {
+                log::info!("[Heuristic Search] Found a provable minimal set: {:?}", minimal_set);
+                return (true, Stats::default(), minimal_set);
+            }
+        }
+
+        log::info!("[Heuristic Search] No combination resulted in a provable outcome.");
+        return (false, Stats::default(), vec![]);
+    }
+    /* log::info!("[SearchRelaxed] Found minimal constraint set ({} constraints):", minimal_constraints.len());
     for (i, constraint) in minimal_constraints.iter().enumerate() {
         log::info!("[Minimal Set {}] {:?}", i + 1, constraint);
     }
-
-    (true, initial_stats, minimal_constraints)	
+    (true, initial_stats, minimal_constraints) */
 }
 
 fn rewrite_scans(rel: &mut URelation, alias_map: &HashMap<usize, usize>) {

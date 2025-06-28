@@ -528,7 +528,7 @@ impl<'c> Ctx<'c> {
 		if let Some(t) = std::env::var("QED_SMT_TIMEOUT").ok().and_then(|t| t.parse::<u64>().ok()) {
 			Duration::from_millis(t)
 		} else {
-			Duration::from_secs(10)
+			Duration::from_secs(120)
 		}
 	}
 
