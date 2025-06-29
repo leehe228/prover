@@ -19,7 +19,12 @@ paste = "1.0"
 indenter = "0.3"
 log = "0.4"
 env_logger = "0.10"
-imbl = "2.0"
+imbl = { version = "2.0", features = ["serde"] }
 anyhow = "1.0"
 num = "0.4"
 crossbeam = { git = "https://github.com/crossbeam-rs/crossbeam", branch = "master" }
+redis = { version = "0.32.2", features = ["tokio-comp"] }
+once_cell = "1.19"
+bincode = "1.3"
+hex = "0.4"
+sha2 = "0.10"
