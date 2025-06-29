@@ -1,15 +1,16 @@
 use std::ops::Mul;
 
 use imbl::{vector, Vector};
+use serde::{Serialize, Deserialize};
 
 use super::shared::{Lambda, Schema};
 use crate::pipeline::shared::{DataType, Eval, Neutral as Neut, Terms, Typed, VL};
 use crate::pipeline::unify::Unify;
 use crate::pipeline::{normal, shared, syntax};
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Relation(pub Vector<DataType>, pub Env, pub syntax::UExpr);
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Aggr(pub String, pub Vector<DataType>, pub Env, pub syntax::UExpr, pub syntax::Expr);
 pub type Expr = shared::Expr<UExpr, Relation, Aggr>;
 pub type Logic = shared::Logic<UExpr, Expr>;
@@ -51,7 +52,7 @@ impl UExpr {
 	}
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Term {
 	pub logic: Logic,
 	pub apps: Vector<Neutral>,
@@ -151,7 +152,7 @@ impl Term {
 	}
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Env(Vector<Expr>, Vector<Schema>);
 
 impl Env {

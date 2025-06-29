@@ -5,6 +5,7 @@ use imbl::{vector, Vector};
 use indenter::indented;
 use itertools::Itertools;
 use UExpr::*;
+use serde::{Serialize, Deserialize};
 
 use super::shared::{Lambda, Neutral, Typed};
 use crate::pipeline::shared;
@@ -14,7 +15,7 @@ pub type Relation = Lambda<UExpr>;
 pub type Expr = shared::Expr<UExpr, Relation, Aggr>;
 pub type Logic = shared::Logic<UExpr, Expr>;
 
-#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Aggr(pub String, pub Vector<DataType>, pub UExpr, pub Box<Expr>);
 
 impl Display for Aggr {
@@ -36,7 +37,7 @@ impl Typed for Aggr {
 /// An expression that evaluates to a U-semiring value.
 /// This include all constants and operation defined over the U-semiring,
 /// as well as the result of a predicate and application of a relation with some arguments.
-#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum UExpr {
 	// Addition
 	Add(Vector<UExpr>),

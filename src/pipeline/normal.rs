@@ -19,6 +19,8 @@ use super::unify::{Unify, UnifyEnv};
 use crate::pipeline::relation::{self, num_cmp, num_op, Expr as RelExpr};
 use crate::pipeline::shared::{DataType, Eval, Neutral as Neut, Schema, Terms, VL};
 use crate::pipeline::{partial, shared};
+use crate::pipeline::cache;
+use serde::{Serialize, Deserialize};
 
 pub type Relation = Lambda<UExpr>;
 
@@ -36,7 +38,7 @@ impl UExpr {
     }
 }
 
-#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Aggr(pub String, pub Vector<DataType>, pub Box<Inner>, pub Box<Expr>);
 
 impl Display for Aggr {
@@ -61,7 +63,7 @@ impl Aggr {
     }
 }
 
-#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Inner {
     pub logic: Logic,
     pub apps: Vector<Neutral>,
@@ -317,11 +319,20 @@ impl Eval<(VL, DataType), Expr> for &Env {
 
 impl Eval<partial::Relation, Relation> for &Env {
     fn eval(self, source: partial::Relation) -> Relation {
+        // ---------- Redis Cache Retrieval ----------
+        let key = cache::sha_key("norm", &(&*self, &source));
+        if let Some(hit) = cache::get::<Relation>(&key) {
+            return hit;
+        }
+
         let partial::Relation(scope, clos_env, body) = source;
         let env = &(self + &scope);
         let vars = shared::Expr::vars(self.len(), scope.clone());
         let body: partial::UExpr = (&clos_env.append(vars)).eval(body);
-        Lambda(scope, env.eval(body))
+        let result = Lambda(scope, env.eval(body));
+
+        cache::set(&key, &result);
+        result
     }
 }
 

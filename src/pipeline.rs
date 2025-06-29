@@ -26,6 +26,7 @@ mod tests;
 pub mod unify;
 pub mod enumerator;
 pub mod filter;
+pub mod cache;
 
 #[derive(Debug, Default, Clone)]
 pub struct QueryInfo {

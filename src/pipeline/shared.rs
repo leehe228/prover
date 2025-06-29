@@ -44,8 +44,8 @@ pub struct Schema {
 	pub guaranteed: Vec<super::relation::Expr>,
 }
 
-#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
-pub enum Expr<U, R, A> {
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum Expr<U: Clone, R: Clone, A: Clone> {
 	Var(VL, DataType),
 	Log(Box<Logic<U, Expr<U, R, A>>>),
 	Agg(A),
@@ -57,7 +57,7 @@ pub trait Typed {
 	fn ty(&self) -> DataType;
 }
 
-impl<U, R, A: Typed> Typed for Expr<U, R, A> {
+impl<U: Clone, R: Clone, A: Clone + Typed> Typed for Expr<U, R, A> {
 	fn ty(&self) -> DataType {
 		use Expr::*;
 		match self {
@@ -68,13 +68,13 @@ impl<U, R, A: Typed> Typed for Expr<U, R, A> {
 	}
 }
 
-impl<U, R, A: Typed> Expr<U, R, A> {
+impl<U: Clone, R: Clone, A: Clone + Typed> Expr<U, R, A> {
 	pub fn is_null(self) -> Logic<U, Self> {
 		Logic::Eq(Self::Op("NULL".to_string(), vec![], self.ty()), self)
 	}
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub struct Lambda<U>(pub Vector<DataType>, pub U);
 
 impl<U: Display> Display for Lambda<U> {
@@ -84,7 +84,7 @@ impl<U: Display> Display for Lambda<U> {
 	}
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub struct Sigma<U>(pub Vector<DataType>, pub U);
 
 impl<U: Display> Display for Sigma<U> {
@@ -95,8 +95,8 @@ impl<U: Display> Display for Sigma<U> {
 	}
 }
 
-#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
-pub enum Logic<U, E> {
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum Logic<U: Clone, E: Clone> {
 	Bool(E),
 	Eq(E, E),
 	Pred(String, Vec<E>),
@@ -106,7 +106,7 @@ pub enum Logic<U, E> {
 	Squash(Box<U>),
 }
 
-impl<U, E> Logic<U, E> {
+impl<U: Clone, E: Clone> Logic<U, E> {
 	pub fn tt() -> Self {
 		Logic::And(vector![])
 	}
@@ -160,7 +160,7 @@ impl<U: Clone, E: Clone> Sum for Logic<U, E> {
 	}
 }
 
-impl<U, E> Not for Logic<U, E> {
+impl<U: Clone, E: Clone> Not for Logic<U, E> {
 	type Output = Self;
 
 	fn not(self) -> Self::Output {
@@ -168,7 +168,7 @@ impl<U, E> Not for Logic<U, E> {
 	}
 }
 
-impl<E: Display, U: Display> Display for Logic<U, E> {
+impl<E: Clone + Display, U: Clone + Display> Display for Logic<U, E> {
 	fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
 		use Logic::*;
 		match self {
@@ -208,7 +208,7 @@ impl<U: Clone, R: Clone, A: Clone> Expr<U, R, A> {
 	}
 }
 
-impl<U: Display, R: Display, A: Display> Display for Expr<U, R, A> {
+impl<U: Clone + Display, R: Clone + Display, A: Clone + Display> Display for Expr<U, R, A> {
 	fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
 		match self {
 			Expr::Var(v, _) => write!(f, "{}", v),
@@ -223,19 +223,19 @@ impl<U: Display, R: Display, A: Display> Display for Expr<U, R, A> {
 	}
 }
 
-impl<U, R, A> From<u32> for Expr<U, R, A> {
+impl<U: Clone, R: Clone, A: Clone> From<u32> for Expr<U, R, A> {
 	fn from(n: u32) -> Self {
 		Expr::Op(n.to_string(), vec![], DataType::Integer)
 	}
 }
 
-impl<U, R, A> From<usize> for Expr<U, R, A> {
+impl<U: Clone, R: Clone, A: Clone> From<usize> for Expr<U, R, A> {
 	fn from(n: usize) -> Self {
 		Expr::Op(n.to_string(), vec![], DataType::Integer)
 	}
 }
 
-impl<U, R, A> From<String> for Expr<U, R, A> {
+impl<U: Clone, R: Clone, A: Clone> From<String> for Expr<U, R, A> {
 	fn from(s: String) -> Self {
 		Expr::Op(s, vec![], DataType::String)
 	}
@@ -261,7 +261,7 @@ where Env: Eval<(VL, DataType), Expr<V, S, B>>
 	}
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum Head<R, E> {
 	Var(VL),
 	HOp(String, Vec<E>, Box<R>),
@@ -290,10 +290,10 @@ where Env: Eval<R, S> + Eval<Vec<E>, Vec<F>> + Clone
 	}
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Neutral<R, E>(pub Head<R, E>, pub Vector<E>);
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub struct Neutral<R, E: Clone>(pub Head<R, E>, pub Vector<E>);
 
-impl<R: Display, E: Display> Display for Neutral<R, E> {
+impl<R: Display, E: Clone + Display> Display for Neutral<R, E> {
 	fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
 		write!(f, "{}({})", self.0, self.1.iter().format(", "))
 	}
@@ -311,7 +311,7 @@ where Env: Eval<Head<R, E>, Head<S, F>> + Eval<Vector<E>, Vector<F>> + Clone
 
 /// SQL data types (adapted from sqlparser)
 #[derive(
-	Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize_enum_str, Deserialize_enum_str,
+	Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, /* Serialize_enum_str, Deserialize_enum_str, */ Serialize, Deserialize,
 )]
 #[serde(rename_all = "UPPERCASE")]
 pub enum DataType {
@@ -329,14 +329,14 @@ pub enum DataType {
 	#[serde(alias = "VARCHAR", alias = "CHAR", alias = "TEXT")]
 	String,
 	/// Custom type such as enums
-	#[serde(other)]
+	// #[serde(other)]
 	Custom(String),
 }
 
-#[derive(Clone, Debug, Default, Ord, PartialOrd, Eq, PartialEq, Hash)]
-pub struct Terms<T>(pub Vector<T>);
+#[derive(Clone, Debug, Default, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct Terms<T: Clone>(pub Vector<T>);
 
-impl<T> Terms<T> {
+impl<T: Clone> Terms<T> {
 	pub fn zero() -> Self {
 		Terms(vector![])
 	}
@@ -371,7 +371,7 @@ impl<T: Clone> IntoIterator for Terms<T> {
 	}
 }
 
-impl<'a, T> IntoIterator for &'a Terms<T> {
+impl<'a, T: Clone> IntoIterator for &'a Terms<T> {
 	type Item = &'a T;
 	type IntoIter = Iter<'a, T>;
 
@@ -414,7 +414,7 @@ where T::Output: Clone
 	}
 }
 
-impl<T: Display> Display for Terms<T> {
+impl<T: Clone + Display> Display for Terms<T> {
 	fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
 		write!(f, "{}", self.iter().join("\n+ "))
 	}
