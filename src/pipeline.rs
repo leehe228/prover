@@ -151,6 +151,12 @@ fn verify_with_constraints(
     constraints: &[Constraint],
     help: &(String, String)
 ) -> (bool, Stats) {
+    // ---------- Redis 캐시 조회 -----------
+    let cache_key = cache::sha_key("verify", &(query_pair.clone(), constraints));
+    if let Some(hit) = cache::get::<(bool, Stats)>(&cache_key) {
+        return hit;
+    }
+
     let (mut rel1, mut rel2) = query_pair;
     let mut stats = Stats::default();
 	let subst = vector![];
@@ -239,6 +245,7 @@ fn verify_with_constraints(
 	stats.complete_fragment = rel1.complete() && rel2.complete();
 	if rel1 == rel2 {
 		println!("Trivially true!");
+        cache::set(&cache_key, &(true, stats.clone()));
 		return (true, stats);
 	}
 	let syn_start = Instant::now();
@@ -248,6 +255,7 @@ fn verify_with_constraints(
 	log::info!("Syntax left:\n{}", rel1);
 	log::info!("Syntax right:\n{}", rel2);
 	if rel1 == rel2 {
+        cache::set(&cache_key, &(true, stats.clone()));
 		return (true, stats);
 	}
 	let nom_env = &vector![];
@@ -262,6 +270,7 @@ fn verify_with_constraints(
 	log::info!("Normal left:\n{}", rel1);
 	log::info!("Normal right:\n{}", rel2);
 	if rel1 == rel2 {
+        cache::set(&cache_key, &(true, stats.clone()));
 		return (true, stats);
 	}
 	let config = Config::new();
@@ -294,13 +303,17 @@ fn verify_with_constraints(
 
 	ctx.stats.borrow_mut().stable_duration = stb_start.elapsed();
 	if rel1 == rel2 {
-		return (true, ctx.stats.borrow().clone());
+		// return (true, ctx.stats.borrow().clone());
+        let s = ctx.stats.borrow().clone();
+        cache::set(&cache_key, &(true, s.clone()));
+        return (true, s);
 	}
 	let env = UnifyEnv(ctx.clone(), vector![], vector![]);
 	let unify_start = Instant::now();
 	let res = env.unify(&rel1, &rel2);
 	ctx.stats.borrow_mut().unify_duration = unify_start.elapsed();
 	let stats = ctx.stats.borrow().clone();
+    cache::set(&cache_key, &(res, stats.clone()));
 	(res, stats)
 }
 
