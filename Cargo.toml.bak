@@ -1,0 +1,26 @@
+[package]
+name = "qed-prover"
+version = "0.1.0"
+authors = ["Shuxian Wang <wsx@berkeley.edu>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+walkdir = "2"
+serde = { version = "1.0", features = ["derive"] }
+serde-enum-str = "0.3"
+serde_json = "1.0"
+z3 = { path = "vendor/z3.rs/z3" }
+z3-sys = { path = "vendor/z3.rs/z3-sys" }
+scopeguard = "1.1"
+itertools = "0.10"
+permutation = "0.2"
+paste = "1.0"
+indenter = "0.3"
+log = "0.4"
+env_logger = "0.10"
+imbl = "2.0"
+anyhow = "1.0"
+num = "0.4"
+crossbeam = { git = "https://github.com/crossbeam-rs/crossbeam", branch = "master" }
