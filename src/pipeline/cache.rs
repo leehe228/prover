@@ -1,5 +1,5 @@
 use once_cell::sync::Lazy;
-use redis::{Commands, Connection, Client};
+use redis::{Commands, Connection, Client, RedisError};
 use serde::{Serialize, de::DeserializeOwned};
 use std::env;
 use bincode::{serialize as bincode_serialize, deserialize as bincode_deserialize};
@@ -13,16 +13,27 @@ static REDIS: Lazy<Mutex<Connection>> = Lazy::new(|| {
 });
 
 fn encode<T: Serialize>(v: &T) -> Vec<u8>   { bincode_serialize(v).unwrap() }
-fn decode<T: DeserializeOwned>(buf: Vec<u8>) -> T { bincode_deserialize(&buf).unwrap() }
+fn decode<T: DeserializeOwned>(buf: Vec<u8>) -> Option<T> {
+    bincode_deserialize(&buf).ok()
+}
 
 pub fn get<T: DeserializeOwned>(k: &str) -> Option<T> {
-    let mut conn = REDIS.lock().expect("Redis mutex poisoned");
-    conn.get::<_, Vec<u8>>(k).ok().map(decode)
+    let mut conn = match REDIS.lock() {
+        Ok(c) => c,
+        Err(_) => return None, 
+    };
+
+    match conn.get::<_, Vec<u8>>(k) {
+        Ok(buf) => decode(buf),
+        Err(_) => None,
+    }
 }
 
 pub fn set<T: Serialize>(k: &str, v: &T) {
     let mut conn = REDIS.lock().expect("Redis mutex poisoned");
-    let _ : () = conn.set(k, encode(v)).unwrap();   // 실패 시 panic → 로그로 대체 가능
+    if let Err(e) = conn.set::<_, _, ()>(k, encode(v)) {
+        log::warn!("Redis SET failed for key {}: {}", k, e);
+    }
 }
 
 /// 공통 SHA-256 key 헬퍼 (serde_json 직렬화 → hex)
