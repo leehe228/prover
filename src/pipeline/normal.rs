@@ -322,6 +322,7 @@ impl Eval<partial::Relation, Relation> for &Env {
         // ---------- Redis Cache Retrieval ----------
         let key = cache::sha_key("norm", &(&*self, &source));
         if let Some(hit) = cache::get::<Relation>(&key) {
+            log::info!("[Cache Hit] {}", key);
             return hit;
         }
 
@@ -409,6 +410,23 @@ pub struct Z3Env<'c> {
     pub h_ops: Rc<RefCell<HOpMap<'c>>>,
     pub aggs: Rc<RefCell<AggMap<'c>>>,
     pub rel_h_ops: Rc<RefCell<RelHOpMap<'c>>>,
+}
+
+impl<'c> Default for Z3Env<'c> {
+    fn default() -> Self {
+        let mut cfg = z3::Config::new();
+        cfg.set_model_generation(false);
+        let z3_ctx: &'static z3::Context = Box::leak(Box::new(z3::Context::new(&cfg)));
+        let solver = z3::Solver::new(z3_ctx);
+        let ctx = Rc::new(Ctx::new(solver));
+        Z3Env {
+            ctx,
+            subst: Vector::new(),
+            h_ops: Rc::new(RefCell::new(HashMap::new())),
+            aggs: Rc::new(RefCell::new(HashMap::new())),
+            rel_h_ops: Rc::new(RefCell::new(HashMap::new())),
+        }
+    }
 }
 
 impl<'c> Z3Env<'c> {

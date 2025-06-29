@@ -5,16 +5,19 @@ use imbl::{vector, HashSet, Vector};
 use itertools::Itertools;
 use z3::ast::Ast;
 use z3::SatResult;
+use serde::{Serialize, Deserialize};
+use crate::pipeline::cache;
 
 use super::normal::Z3Env;
 use super::shared::{Ctx, DataType, Eval, Lambda, Sigma, Terms};
 use crate::pipeline::normal;
 use crate::pipeline::shared::{self, Typed, VL};
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Aggr<'c>(
 	pub String,
 	pub Vector<DataType>,
+	#[serde(skip_serializing, skip_deserializing)]
 	pub Env<'c>,
 	pub normal::Inner,
 	pub normal::Expr,
@@ -30,13 +33,26 @@ pub type Expr<'c> = shared::Expr<UExpr<'c>, Relation<'c>, Aggr<'c>>;
 pub type Neutral<'c> = shared::Neutral<Relation<'c>, Expr<'c>>;
 pub type Logic<'c> = shared::Logic<UExpr<'c>, Expr<'c>>;
 
-#[derive(Clone)]
-pub struct Relation<'c>(pub Vector<DataType>, pub Env<'c>, pub normal::UExpr);
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Relation<'c>(
+	pub Vector<DataType>, 
+	#[serde(skip_serializing, skip_deserializing)]
+	pub Env<'c>, 
+	pub normal::UExpr
+);
 pub type UExpr<'c> = Terms<Term<'c>>;
 
 // Env(subst: C -> stb::Expr D, z3: C -> z3::Expr): Eval (nom::Expr C) (stb::Expr D)
-#[derive(Clone)]
-pub struct Env<'c>(pub Vector<Option<Expr<'c>>>, pub Z3Env<'c>);
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(bound(deserialize = ""))]
+pub struct Env<'c>(
+	// pub Vector<Option<Expr<'c>>>, 
+	// pub Z3Env<'c>
+	#[serde(skip_serializing, skip_deserializing)]
+	pub Vector<Option<Expr<'c>>>,
+	#[serde(skip_serializing, skip_deserializing)]
+	pub Z3Env<'c>,
+);
 
 impl<'c> Env<'c> {
 	pub fn append(&self, subst: Vector<Option<Expr<'c>>>) -> Self {
@@ -49,8 +65,13 @@ impl<'c> Env<'c> {
 	}
 }
 
-#[derive(Clone)]
-pub struct Term<'c>(pub Vector<DataType>, pub Env<'c>, pub normal::Inner);
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Term<'c>(
+	pub Vector<DataType>, 
+	#[serde(skip_serializing, skip_deserializing)]
+	pub Env<'c>, 
+	pub normal::Inner
+);
 
 impl<'c> Eval<(VL, DataType), Expr<'c>> for &Env<'c> {
 	fn eval(self, (VL(l), _): (VL, DataType)) -> Expr<'c> {
@@ -238,6 +259,13 @@ pub fn stablize<'c>(
 	context: &Vector<DataType>,
 	logic: normal::Logic,
 ) -> Option<(Vector<DataType>, Vector<Option<Expr<'c>>>)> {
+	// ---------- Redis 캐시 조회 -----------
+	let key = cache::sha_key("stab", &(&scope, context, &logic));
+	if let Some(hit) = cache::get::<(Vector<DataType>, Vector<Option<Expr<'c>>>)>(&key) {
+		log::info!("[Cache Hit] {}", key);
+		return Some(hit);
+	}
+
 	let Env(subst, z3_env) = env;
 	let z3_env = &z3_env.extend(&scope);
 	let solver = &z3_env.ctx.solver;
@@ -303,7 +331,11 @@ pub fn stablize<'c>(
 				groups.iter().map(|(g, e)| format!("[{}, {}]", g, e)).join(", ")
 			);
 			let env = &Env(subst.clone(), z3_env.clone());
-			Some(min_subst(env, scope, context, &groups))
+			// Some(min_subst(env, scope, context, &groups))
+			let out = min_subst(env, scope, context, &groups);
+			cache::set(&key, &out);
+			log::info!("[Cache Set] {}", key);
+			Some(out)
 		},
 	}
 }
