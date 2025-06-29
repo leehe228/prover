@@ -3,6 +3,8 @@ use itertools::{Itertools, iproduct};
 use crate::pipeline::relation::{Constraint, Expr};
 use crate::pipeline::shared::{DataType, Schema, VL};
 use crate::pipeline::QueryInfo;
+use crate::pipeline::cache;
+use serde::Serialize;
 
 pub struct ConstraintEnumerator;
 
@@ -13,6 +15,13 @@ impl ConstraintEnumerator {
 
     /// 분석된 쿼리 정보를 바탕으로 가능한 모든 제약 조건 후보를 생성합니다.
     pub fn enumerate(&self, info: &QueryInfo, schemas: &[Schema]) -> Vec<Constraint> {
+        // ---------- Redis 캐시 조회 -----------
+        let key = cache::sha_key("enum", info);
+        if let Some(hit) = cache::get::<Vec<Constraint>>(&key) {
+            log::info!("[Enum] cache hit: {} constraints", hit.len());
+            return hit;
+        }
+
         let mut constraints = Vec::new();
 
         constraints.extend(self.enumerate_rel_eq(info));
@@ -23,6 +32,7 @@ impl ConstraintEnumerator {
         constraints.extend(self.enumerate_uniqueness(info, schemas));
         constraints.extend(self.enumerate_not_null(info, schemas));
 
+        cache::set(&key, &constraints);
         constraints
     }
 

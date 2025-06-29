@@ -7,11 +7,13 @@ use crossbeam::sync::UnparkReason;
 use imbl::Vector;
 use itertools::Itertools;
 use z3::ast::{Ast, Bool, Dynamic, Int};
+use serde::Serialize;
 
 use super::normal::{Inner, Term};
 use super::shared::{Ctx, Lambda, Sigma};
 use crate::pipeline::normal::{Expr, UExpr, Z3Env};
 use crate::pipeline::shared::{DataType, Eval};
+use crate::pipeline::cache;
 
 pub trait Unify<T> {
 	fn unify(&self, t1: &T, t2: &T) -> bool;
@@ -70,6 +72,18 @@ impl<'c> Unify<UExpr> for UnifyEnv<'c> {
 
 impl<'c> Unify<Vec<Expr>> for UnifyEnv<'c> {
 	fn unify(&self, es1: &Vec<Expr>, es2: &Vec<Expr>) -> bool {
+		// ---------- Redis 캐시 조회 -----------
+		let key = if es1 <= es2 {
+			cache::sha_key("unify", &(es1, es2))
+		} else {
+			cache::sha_key("unify", &(es2, es1))
+		};
+
+		if let Some(hit) = cache::get::<bool>(&key) {
+			log::info!("[Cache Hit] {}", key);
+			return hit;
+		}
+
 		let UnifyEnv(ctx, _, _) = self;
 		es1.len() == es2.len() && {
 			let (ref env1, ref env2) = self.envs();
@@ -80,6 +94,7 @@ impl<'c> Unify<Vec<Expr>> for UnifyEnv<'c> {
 			let unify_start = Instant::now();
 			let (res, timed_out) = smt(&ctx.solver, h_ops_eq.implies(&eq));
 			ctx.update_smt_duration(unify_start.elapsed(), timed_out);
+			cache::set(&key, &res);
 			res
 		}
 	}

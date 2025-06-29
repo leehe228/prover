@@ -28,7 +28,7 @@ pub mod enumerator;
 pub mod filter;
 pub mod cache;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct QueryInfo {
     /// 쿼리에서 사용된 릴레이션의 인덱스 Set
     pub relations: HashSet<usize>,
