@@ -322,8 +322,13 @@ impl Eval<partial::Relation, Relation> for &Env {
         // ---------- Redis Cache Retrieval ----------
         let key = cache::sha_key("norm", &(&*self, &source));
         if let Some(hit) = cache::get::<Relation>(&key) {
-            log::info!("[Cache Hit] {}", key);
-            return hit;
+            if let partial::Relation(scope, ..) = &source {
+                if scope.len() == hit.0.len() {
+                    log::info!("[Cache Hit] {}", key);
+                    return hit;
+                }
+            }
+            log::warn!("[Cache Corrupt] drop key {}", key);
         }
 
         let partial::Relation(scope, clos_env, body) = source;

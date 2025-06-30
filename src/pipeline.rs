@@ -1,9 +1,10 @@
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, BTreeSet};
 
 use imbl::vector;
 use serde::{Deserialize, Serialize};
+use serde_with::{serde_as};
 use z3::{Config, Context, Solver};
 use itertools::Itertools;
 
@@ -29,8 +30,10 @@ pub mod filter;
 pub mod cache;
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde_as]
 pub struct QueryInfo {
     /// 쿼리에서 사용된 릴레이션의 인덱스 Set
+    #[serde_as(as = "BTreeSet<_>")]
     pub relations: HashSet<usize>,
     /// 쿼리에서 사용된 속성(칼럼)의 Set (relation_index, column_index)
     pub attributes: HashSet<(usize, usize)>,
@@ -153,8 +156,11 @@ fn verify_with_constraints(
 ) -> (bool, Stats) {
     // ---------- Redis 캐시 조회 -----------
     let cache_key = cache::sha_key("verify", &(query_pair.clone(), constraints));
-    if let Some(hit) = cache::get::<(bool, Stats)>(&cache_key) {
-        return hit;
+    if let Some((b, s)) = cache::get::<(bool, Stats)>(&cache_key) {
+        if b == s.provable {
+            return (b, s);
+        }
+        log::warn!("[Cache Corrupt] drop key {}", cache_key);
     }
 
     let (mut rel1, mut rel2) = query_pair;

@@ -260,10 +260,20 @@ pub fn stablize<'c>(
 	logic: normal::Logic,
 ) -> Option<(Vector<DataType>, Vector<Option<Expr<'c>>>)> {
 	// ---------- Redis 캐시 조회 -----------
-	let key = cache::sha_key("stab", &(&scope, context, &logic));
+	let key = cache::sha_key("stab", &(&scope, context, &logic, env.0.len()));
 	if let Some(hit) = cache::get::<(Vector<DataType>, Vector<Option<Expr<'c>>>)>(&key) {
-		log::info!("[Cache Hit] {}", key);
-		return Some(hit);
+		// 무결성: scope와 subst 길이가 반드시 같아야 함
+		if hit.0.len() == hit.1.len() {
+			log::info!("[Cache Hit] {}", key);
+			return Some(hit);
+		} else {
+			log::warn!(
+				"[Cache Corrupt] drop key {} (scope {}, subst {})",
+				key,
+				hit.0.len(),
+				hit.1.len()
+			);
+		}
 	}
 
 	let Env(subst, z3_env) = env;
